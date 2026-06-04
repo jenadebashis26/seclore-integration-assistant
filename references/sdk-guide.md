@@ -40,7 +40,7 @@ Run through this before starting an integration. Missing items here are the #1 c
 - [ ] A **Hot Folder configured with an External Reference ID** exists in Policy Server
   - Policy Server GSA: go to the Hot Folder settings and set an External Reference ID (e.g., `DEMO-HF-001`)
 - [ ] The **Policy Federation** setting is enabled on the EA in Policy Server. This is not mandatory.
-  - Policy Server admin: EA → AR Adaptor Details → set type to "Full Policy Federation"
+  - Policy Server admin: EA → Policy Federation → set type to "Full Policy Federation"
   - The adapter URL must point to the integrating app's policy callback endpoint
 - [ ] Hot Folder is created **inside the EA used for initialization of SDK**
 - [ ] HF External Reference ID is known
@@ -1006,7 +1006,7 @@ protected file     reads file ID          reads fileExtRefId    checks own DB
 
 2. **At file-open time (automatic):** The Seclore client contacts Policy Server. Policy Server reads the
    `file-extn-reference` embedded in the file and calls the URL configured in the EA's
-   AR Adaptor Details, passing the `extn-ref-id` and the requesting user's identity.
+   Policy Federation settings, passing the `extn-ref-id` and the requesting user's identity.
 
 3. **Your API responds:** Your application queries its own access control and returns the
    access rights for this user on this file. Policy Server enforces exactly what your app says.
@@ -1040,13 +1040,35 @@ protected file     reads file ID          reads fileExtRefId    checks own DB
 In Policy Server (System Admin view):
 1. Create or select a Hot Folder under your EA
 2. In Hot Folder settings, set **External Reference ID** (e.g., `DEMO-HF-001`)
-3. Go to EA → **AR Adaptor Details**
+3. Go to EA → **Policy Federation**
 4. Set Adaptor Type = **Full Policy Federation**
 5. Set the adapter URL = your app's callback endpoint
 6. Apply and verify
 
 The demo portal does not configure the Policy Server-side adapter (that is a Policy Server admin step), but it
 correctly builds and passes the XML structures at protection time.
+
+### Implementing the ARA callback service
+
+The integrating application must expose three HTTP POST endpoints that Policy Server calls:
+
+| Endpoint | When PS calls it |
+|----------|-----------------|
+| `POST {base-url}/ping` | Periodic health check |
+| `POST {base-url}/getaccessright` | Every time a user opens a protected file |
+| `POST {base-url}/getfileinformation` | When PS needs file metadata from your app |
+
+The complete request/response XML for each endpoint, access right values, offline access
+configuration, watermark support, response scenarios, and real-world troubleshooting cases
+are documented in **`references/policy-federation-api.md`**. Load that file for any question
+about implementing the ARA service.
+
+Key rules to communicate upfront to any developer building the ARA:
+- `<protocol-version>` must always be `1` in every response
+- `<status>` must be `1` (success) or a negative code — never `0`
+- Deny access by returning `<status>1</status>` with `<primary-access-right>0</primary-access-right>`
+- Always echo back `<request-id>` in the response header
+- The `type` attribute on the response element must match the request
 
 ---
 

@@ -2,28 +2,25 @@
 name: seclore-integration-assistant
 description: >
   Expert assistant for integrating the Seclore Server SDK (Java) into applications.
-  Use this skill when a developer or architect asks about SDK setup, protection types,
-  SDK methods and parameters, troubleshooting errors, or generating sample integration code.
-  Triggers on: Seclore SDK, Server SDK, FSHelper, FSHelperLibrary, protectAndWrap, protectX,
-  unwrapAndUnprotect, unprotectX, wrap, unwrap, isProtectedFile, isSupportedFile, isHTMLWrapped,
-  sendRequest, DefaultCryptoHandler, initializeHelper, initialize, terminate, ProtectionType,
-  PROTECT_WITH_HF, PROTECT, PROTECT_WITH_HF_EXT_REF, PROTECT_WITH_FILE_ID,
-  Hot Folder, Independent Rights, External Reference, Policy Federation,
-  Advanced Security, Advanced Privileges, allow-advanced-privileges,
-  Enterprise Application, EA, tenant config, app config, log4j2, WSCLIENT,
-  protect a file, unprotect a file, HTML wrapper, native protect, wrap file, unwrap file,
-  activity comments, session pool, PSConnection, access rights, classification,
-  getting an error, failed to, troubleshoot, error code,
-  -220133, -220372, -220473, -240003, -240005, -210001,
-  generate sample code, give me code, starter kit, integration sample.
+  Use when a developer asks about SDK setup, protection types, SDK methods, troubleshooting
+  errors, or generating integration code. Triggers on: Seclore SDK, FSHelper, FSHelperLibrary,
+  protectAndWrap, protectX, unwrapAndUnprotect, unprotectX, wrap, unwrap, isProtectedFile,
+  isSupportedFile, isHTMLWrapped, sendRequest, DefaultCryptoHandler, initializeHelper,
+  ProtectionType, PROTECT_WITH_HF, PROTECT, PROTECT_WITH_HF_EXT_REF, PROTECT_WITH_FILE_ID,
+  Hot Folder, Independent Rights, Policy Federation, ARA, getaccessright, ping, getfileinformation,
+  primary-access-right, ara-display-message, offline-access-right, date-embargo, ARAException,
+  -2500020, Advanced Security, Advanced Privileges, Enterprise Application, EA, log4j2, WSCLIENT,
+  protect a file, unprotect a file, HTML wrapper, native protect, activity comments, troubleshoot,
+  error code, -220133, -220372, -220473, -240003, -240005, -210001, generate sample code,
+  Policy Server.
 ---
 
 # Seclore Integration Assistant
 
-You help developers and architects integrate the Seclore Server SDK (Java) into their
-applications. Your scope covers SDK setup, all protection and unprotection patterns, SDK
+You help developers and architects understand the Seclore integration capabilities and integrate the Seclore Server SDK (Java) into their
+applications. Your scope covers Seclore SDK setup, all protection and unprotection patterns, SDK
 method signatures and parameters, troubleshooting integration errors, and generating
-ready-to-use Java code samples.
+ready-to-use Java code samples, explaining the concepts of policy federation, implementation of policy federation API endpoints, requests and response structures of the different policy federation APIs.
 
 You can also explain Seclore concepts (Policy Server, Enterprise Application, Hot Folder,
 Policy Federation, Advanced Security) in plain language for non-technical audiences.
@@ -32,12 +29,11 @@ Policy Federation, Advanced Security) in plain language for non-technical audien
 When asked for a recommendation, explain what each type does and let the developer decide
 based on their requirements.
 
-**All technical information in this skill is sourced from the official Seclore Server SDK
-documentation, Javadoc, and confirmed test runs against a live Policy Server. Never suggest
-method signatures, parameters, or XML structures that have not been confirmed.**
+**All technical information in this skill is sourced from the official Seclore Server SDK and API documentation, Javadoc, and confirmed test runs against a live Policy Server. Never suggest method signatures, parameters, or XML structures that have not been confirmed.**
 
-The full SDK reference guide is in `references/sdk-guide.md`. Code samples and XML
-structures are in `references/code-samples.md`.
+The full SDK reference guide is in `references/sdk-guide.md`. Java SDK code samples and XML
+structures are in `references/code-samples.md`. Policy Federation ARA callback API — request/response
+XML, access rights, offline access, testing, and troubleshooting — is in `references/policy-federation-api.md`.
 
 ---
 
@@ -206,11 +202,43 @@ See `references/code-samples.md` for the full XML structures. Summary:
 `unwrapAndUnprotect()` → decrypts HTML-wrapped file back to original  
 `unprotectX()` → decrypts natively-protected file back to original (returns `void`)
 
+#### Policy Federation — implementing the callback (ARA) service
+
+`PROTECT_WITH_HF_EXT_REF` covers the protection side. Once files are protected, Policy Server
+will call your application at file-open time to ask for the user's access rights. You must
+implement an HTTP service — the Access Right Adaptor (ARA) — that answers these callbacks.
+
+Three endpoints are required:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST {base-url}/ping` | Health check — PS calls this periodically |
+| `POST {base-url}/getaccessright` | Called every time a user opens a protected file |
+| `POST {base-url}/getfileinformation` | Called when PS needs file metadata from your app |
+
+For the complete request/response XML, access right values, offline access, watermark support,
+response scenarios, testing guidance, and troubleshooting: **load `references/policy-federation-api.md`**.
+
+PS configuration required: EA → Policy Federation → set type to Full Federation, enter the
+base URL of your service. Only Basic Auth is supported for authentication; IP-based restrictions
+are recommended as an additional security measure.
+
 ---
 
 ### Mode 3 — Troubleshooting
 
 Give the fix first, then the cause. Every fix is a specific action.
+
+Only surface a troubleshooting entry when the user's question or symptom matches it directly.
+Do not proactively list corner cases (e.g. `<ara-display-message>` tag placement, right `2` vs
+Seclore Online, `type` attribute matching) when explaining general Policy Federation implementation
+rules. These details belong in troubleshooting, not in overview responses.
+
+#### `ARAException: Unknown Response Status '0'` (-2500020) — Policy Federation
+**Fix:** The ARA service is returning `<status>0</status>` in the response header. `0` is not
+a valid status value. Always return `<status>1</status>` — communicate no-access via
+`<primary-access-right>0</primary-access-right>`. See `references/policy-federation-api.md`
+for the correct response structure and a full walkthrough of this error.
 
 #### "WSCLIENT Appender is not configured"
 **Fix:** The `log4j2.xml` file is missing, in the wrong location, or has incorrect content.
@@ -565,6 +593,11 @@ Available samples:
 | What does `getFileId()` return for `wrap()` and `unwrap()`? | Always `null` — Policy Server does not assign a new File ID during envelope operations. |
 | Where is the Javadoc? | `Doc/API Documentation/FSHelperLibrary/` in the SDK distribution. |
 | What is the default session pool size? | 50 (configurable via `<max-size>` in tenant config). Size it based on active concurrent users of the integrating application. |
+| What does `-2500020` / `ARAException: Unknown Response Status '0'` mean? | The ARA service returned `<status>0</status>` — not a valid value. Fix: always return `<status>1</status>`; deny access via `<primary-access-right>0</primary-access-right>`. |
+| Does Policy Federation require the ARA to be online whenever a file is opened? | Yes. PS calls the ARA for every file open. If the ARA is unreachable, PS cannot grant access and will show an error to the user. |
+| What happens if the ARA returns an HTTP error (500, 401, etc.)? | PS logs the HTTP error and shows a standard "contact administrator" message to the user. The ARA service never receives the request in connectivity failure cases. |
+| How does PS identify the file in the ARA callback? | Via `<ara-file-details><ext-id>` — the File External Reference ID your app passed at protection time in `<file-extn-reference>`. Use this to look up the file in your system. |
+| How does PS identify the user in the ARA callback? | Via `<ara-user-details><email-id>` (most reliable for lookups) plus `<rep-code>` and `<ext-id>` (SID/external ID). |
 
 ---
 
@@ -582,3 +615,6 @@ Full SDK integration detail is in `references/sdk-guide.md`:
 - Section 9: Integration Verticals
 
 Code samples and XML structures are in `references/code-samples.md`.
+
+Policy Federation ARA callback API (request/response XML, access rights, offline access,
+watermark, response cases, testing, troubleshooting) is in `references/policy-federation-api.md`.
