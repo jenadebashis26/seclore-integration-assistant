@@ -12,8 +12,9 @@ Ask it questions about Seclore SDK setup, protection types, method signatures, X
 - **Different protection types** — Hot Folder, Independent Rights, External Reference (Policy Federation), and Protect with File ID
 - **All SDK operations** — Protect, Unprotect, SendRequest
 - **Advanced Security** — RSA key pair setup, `DefaultCryptoHandler`, advanced privileges (Unprotect Any File, Add/Update other EAs)
-- **Custom Logger Implementation** - Using your own logger for Seclore SDK.
-- **Troubleshooting** — error codes `-220133`, `-220372`, `-220473`, `-240003`, `-210001` and more, with specific fixes
+- **Custom Logger Implementation** — Using your own logger for Seclore SDK
+- **Policy Federation ARA callback service** — implementing the 3 HTTP endpoints (Ping, GetAccessRight, GetFileInformation), request/response XML, access rights, offline access, watermark, response scenarios, testing with Postman, and troubleshooting
+- **Troubleshooting** — error codes `-220133`, `-220372`, `-220473`, `-240003`, `-210001`, `-2500020` and more, with specific fixes
 - **Java code samples** — complete, runnable samples for every protection and unprotection pattern
 - **Starter packages** — ask for a "starter kit" for any protection type and get a full folder with source, run scripts, config, and README
 
@@ -45,6 +46,12 @@ What XML do I pass for PROTECT_WITH_FILE_ID?
 Create a sample code for External Reference protection.
 
 What is the difference between protectX() and protectAndWrap()?
+
+How do I implement the Policy Federation ARA callback service?
+
+I'm getting ARAException: Unknown Response Status '0' — how do I fix it?
+
+What XML should my /getaccessright endpoint return when a user has no access?
 ```
 
 ---
@@ -68,8 +75,11 @@ seclore-integration-assistant/
     │                                  integration patterns, Policy Federation deep dive,
     │                                  Advanced EA setup, Access Rights reference,
     │                                  SDK API quick reference, integration verticals
-    └── code-samples.md             ← Complete Java code samples for all protection types,
-                                       XML reference, log4j2.xml spec, starter package spec
+    ├── code-samples.md             ← Complete Java code samples for all protection types,
+    │                                  XML reference, log4j2.xml spec, starter package spec
+    └── policy-federation-api.md   ← ARA callback API — request/response XML for Ping,
+                                       GetAccessRight, GetFileInformation; access right values;
+                                       offline access; watermark; testing guide; troubleshooting
 ```
 
 ---
@@ -79,6 +89,7 @@ seclore-integration-assistant/
 | Version | Notes |
 |---------|-------|
 | v1.0 | Initial release — Seclore Java SDK Queries, Troubleshooting, Sample Codes |
+| v1.1 | Added Policy Federation ARA callback API reference, testing guide, and troubleshooting |
 
 ---
 
