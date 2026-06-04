@@ -9,9 +9,10 @@ Ask it questions about Seclore SDK setup, protection types, method signatures, X
 ## What it covers
 
 - **SDK setup** — required JARs, log4j2.xml configuration, initialization sequence, App Config and Tenant Config XML
-- **All four protection types** — Hot Folder, Independent Rights, External Reference (Policy Federation), and Protect with File ID
-- **All SDK operations** — `protectAndWrap`, `protectX`, `unwrapAndUnprotect`, `unprotectX`, `wrap`, `unwrap`, `sendRequest`
+- **Different protection types** — Hot Folder, Independent Rights, External Reference (Policy Federation), and Protect with File ID
+- **All SDK operations** — Protect, Unprotect, SendRequest
 - **Advanced Security** — RSA key pair setup, `DefaultCryptoHandler`, advanced privileges (Unprotect Any File, Add/Update other EAs)
+- **Custom Logger Implementation** - Using your own logger for Seclore SDK.
 - **Troubleshooting** — error codes `-220133`, `-220372`, `-220473`, `-240003`, `-210001` and more, with specific fixes
 - **Java code samples** — complete, runnable samples for every protection and unprotection pattern
 - **Starter packages** — ask for a "starter kit" for any protection type and get a full folder with source, run scripts, config, and README
@@ -21,30 +22,29 @@ Ask it questions about Seclore SDK setup, protection types, method signatures, X
 ## Installing in Claude Cowork
 
 1. Clone or download this repository
-2. In Claude Cowork, go to **Skills → Install from folder**
-3. Select the `seclore-integration-assistant` folder
-4. The skill is now available as `/seclore-integration-assistant`
+2. In Claude, Go to Settings → Capabilities → Skills → Customize → Upload a skill
+3. Import the zip to use the skill
+4. The skill will be available as `/seclore-integration-assistant`
 
 ---
 
 ## Example questions
 
 ```
-What JARs do I need to include in my project?
 
-How do I initialize the SDK for Hot Folder protection?
+How do I initialize the SDK?
 
 Give me sample code for Independent Rights protection.
 
 I'm getting error -220133 when protecting a file. What's wrong?
 
-What is the difference between Advanced Security and Advanced Privileges?
+What is Advanced Security and Advanced Privileges?
 
 What XML do I pass for PROTECT_WITH_FILE_ID?
 
-Create a starter package for External Reference protection.
+Create a sample code for External Reference protection.
 
-What does protectX() return compared to protectAndWrap()?
+What is the difference between protectX() and protectAndWrap()?
 ```
 
 ---
@@ -74,25 +74,11 @@ seclore-integration-assistant/
 
 ---
 
-## Contributing
-
-Found an error, confirmed a new XML structure, or encountered an undocumented error code?
-Contributions are welcome.
-
-1. Fork the repository
-2. Make your changes with a clear description of what you confirmed and how
-3. Open a pull request
-
-**Please only contribute information that has been tested against a live Policy Server.**
-Unconfirmed guesses in a skill create more problems than they solve.
-
----
-
 ## Versioning
 
 | Version | Notes |
 |---------|-------|
-| v1.0 | Initial release — all four protection types, Advanced Security/Privileges distinction, confirmed XML for PROTECT_WITH_FILE_ID |
+| v1.0 | Initial release — Seclore Java SDK Queries, Troubleshooting, Sample Codes |
 
 ---
 
