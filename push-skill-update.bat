@@ -19,6 +19,17 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo Pulling remote changes (rebase)...
+git pull --rebase origin main
+
+if %errorlevel% neq 0 (
+    echo.
+    echo Pull/rebase failed. Resolve conflicts manually, then run again.
+    pause
+    exit /b 1
+)
+
+echo.
 echo Pushing to origin...
 git push origin main
 
