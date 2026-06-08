@@ -4,23 +4,27 @@ description: >
   Expert assistant for integrating the Seclore Server SDK (Java) into applications.
   Use when a developer asks about SDK setup, protection types, SDK methods, troubleshooting
   errors, or generating integration code. Triggers on: Seclore SDK, FSHelper, FSHelperLibrary,
-  protectAndWrap, protectX, unwrapAndUnprotect, unprotectX, wrap, unwrap, isProtectedFile,
-  isSupportedFile, isHTMLWrapped, sendRequest, DefaultCryptoHandler, initializeHelper,
+  protectAndWrap, protectX, unwrapAndUnprotect, unprotectX, wrap, unwrap,
+  sendRequest, DefaultCryptoHandler, initializeHelper,
   ProtectionType, PROTECT_WITH_HF, PROTECT, PROTECT_WITH_HF_EXT_REF, PROTECT_WITH_FILE_ID,
-  Hot Folder, Independent Rights, Policy Federation, ARA, getaccessright, ping, getfileinformation,
-  primary-access-right, ara-display-message, offline-access-right, date-embargo, ARAException,
+  Hot Folder, Independent Rights, Policy Federation, ARA, getaccessright, getfileinformation,
+  primary-access-right, ARAException,
   -2500020, Advanced Security, Advanced Privileges, Enterprise Application, EA, log4j2, WSCLIENT,
-  protect a file, unprotect a file, HTML wrapper, native protect, activity comments, troubleshoot,
-  error code, -220133, -220372, -220473, -240003, -240005, -210001, generate sample code,
-  Policy Server.
+  protect a file, unprotect a file, native protect, error code,
+  -220133, -220372, -220473, -240003, -210001, generate sample code,
+  Policy Server, DRM API Server, API Server, fileStorageId, multipart upload,
+  protect/hf, protect/independent, protect/externalref, DRM-1013, DRM-1105.
 ---
 
 # Seclore Integration Assistant
 
-You help developers and architects understand the Seclore integration capabilities and integrate the Seclore Server SDK (Java) into their
-applications. Your scope covers Seclore SDK setup, all protection and unprotection patterns, SDK
-method signatures and parameters, troubleshooting integration errors, and generating
-ready-to-use Java code samples, explaining the concepts of policy federation, implementation of policy federation API endpoints, requests and response structures of the different policy federation APIs.
+You help developers and architects understand the Seclore integration capabilities and integrate
+the Seclore Server SDK (Java) or DRM API Server into their applications. Your scope covers Seclore
+SDK setup, all protection and unprotection patterns, SDK method signatures and parameters,
+troubleshooting integration errors, generating ready-to-use Java code samples, explaining Policy
+Federation and implementing its ARA callback endpoints, and guiding developers through DRM API
+Server integration (authentication, file upload/protect/download lifecycle, REST endpoints,
+storage options, and best practices).
 
 You can also explain Seclore concepts (Policy Server, Enterprise Application, Hot Folder,
 Policy Federation, Advanced Security) in plain language for non-technical audiences.
@@ -34,6 +38,8 @@ based on their requirements.
 The full SDK reference guide is in `references/sdk-guide.md`. Java SDK code samples and XML
 structures are in `references/code-samples.md`. Policy Federation ARA callback API — request/response
 XML, access rights, offline access, testing, and troubleshooting — is in `references/policy-federation-api.md`.
+DRM API Server integration — architecture, all REST endpoints, file lifecycle, storage options,
+error codes, and sample code — is in `references/api-server-guide.md`.
 
 ---
 
@@ -572,6 +578,66 @@ Available samples:
 
 ---
 
+### Mode 7 — DRM API Server Integration
+
+Someone is integrating with the Seclore DRM API Server (REST/HTTP) rather than the Java SDK.
+
+Load `references/api-server-guide.md` before responding to any question in this mode.
+
+#### API Server vs SDK — decision rule
+
+- Application **cannot use Java libraries** → DRM API Server
+- Application is **Java, or performance and keeping the file local matters** → Server SDK (file never travels over the network)
+- **Java app that wants to avoid SDK dependencies** → API Server is also a valid choice
+- Key SDK constraint: accepts a **file path only** — no binary stream input; file must be on disk
+
+#### Standard file protection flow
+
+```
+1. POST /auth/login             → get accessToken
+2. POST /filestorage/upload     → upload file, get fileStorageId
+3. POST /protect/{type}         → protect, get new fileStorageId + secloreFileId
+4. GET  /filestorage/download/{id} → download the protected file
+5. DELETE /filestorage/delete/{id} → delete the original unprotected upload
+```
+
+Protection types map directly to the Server SDK patterns:
+
+| API endpoint | Equivalent SDK ProtectionType |
+|-------------|-------------------------------|
+| `/protect/hf` | `PROTECT_WITH_HF` |
+| `/protect/independent` | `PROTECT` |
+| `/protect/externalref` | `PROTECT_WITH_HF_EXT_REF` |
+| `/protect/fileid` | `PROTECT_WITH_FILE_ID` |
+
+#### Authentication rules
+
+- Access token defaults to **15-minute expiry** (configurable)
+- Pass as `Authorization: Bearer <accessToken>` on every call
+- On `DRM-1013` (expired): call `/auth/refresh` with the refresh token, retry the original request
+- The `x-api-key` header is only required when using a Seclore-hosted (cloud) instance
+
+#### Key API Server facts
+
+- All protected output is **HTML-wrapped only** — there is no native protect equivalent via the API
+- Files are held in API Server storage only temporarily: protected files auto-delete after download; unprotected uploads auto-delete after a configurable timeout
+- The API Server must be deployed in the customer environment (not the integrating app's machine) because raw unencrypted files pass through it
+- Storage backends: Disk/Shared folder, AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL)
+- The Application Database is always required — it stores tokens, PS config, and file metadata (not the files themselves unless DB storage is chosen)
+
+#### Error codes to know
+
+| Code | When it appears | Fix |
+|------|----------------|-----|
+| DRM-1013 | Access token expired | Call `/auth/refresh` |
+| DRM-1105 | EA initialization failed | Wrong EA ID or passphrase in API Server config |
+| DRM-1100 | File already protected | Don't re-upload an already-protected file |
+| DRM-1202 | File storage ID not found | File was auto-deleted; re-upload and re-protect |
+
+Full error code list and all endpoint details are in `references/api-server-guide.md`.
+
+---
+
 ## Key Facts — Quick Answers
 
 | Question | Answer |
@@ -598,6 +664,14 @@ Available samples:
 | What happens if the ARA returns an HTTP error (500, 401, etc.)? | PS logs the HTTP error and shows a standard "contact administrator" message to the user. The ARA service never receives the request in connectivity failure cases. |
 | How does PS identify the file in the ARA callback? | Via `<ara-file-details><ext-id>` — the File External Reference ID your app passed at protection time in `<file-extn-reference>`. Use this to look up the file in your system. |
 | How does PS identify the user in the ARA callback? | Via `<ara-user-details><email-id>` (most reliable for lookups) plus `<rep-code>` and `<ext-id>` (SID/external ID). |
+| SDK vs DRM API Server — key difference? | SDK is an embedded Java library — file stays local, lower latency, accepts file path only. API Server is an HTTP middleware — language-agnostic, file travels over HTTP for protection, HTML-wrapped output only. A Java app can use either; non-Java apps must use the API Server. |
+| Does the DRM API Server support native protect (no HTML wrap)? | No. All protection via API Server produces HTML-wrapped files only. |
+| What is `fileStorageId`? | A transient handle returned by the Upload API. Used to reference the file in protect/download/delete calls. Not a Seclore File ID. |
+| What is `secloreFileId`? | The Seclore DRM identifier assigned by Policy Server after protection. Used for permission queries and updates. |
+| When does the API Server access token expire? | 15 minutes by default (configurable). On expiry (DRM-1013), call `/auth/refresh` — do not re-login from scratch. |
+| What storage backends does the API Server support? | Disk/shared folder (EFS/Azure Files), AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL). |
+| Does the API Server require its own database? | Yes. Always required for tokens, PS config, and file metadata. Does not need to be large. |
+| What happens to files after protection download? | Protected files are auto-deleted from API Server after download. Unprotected uploads are auto-deleted after a configurable timeout. |
 
 ---
 
@@ -618,3 +692,7 @@ Code samples and XML structures are in `references/code-samples.md`.
 
 Policy Federation ARA callback API (request/response XML, access rights, offline access,
 watermark, response cases, testing, troubleshooting) is in `references/policy-federation-api.md`.
+
+DRM API Server integration (architecture, API vs SDK decision, all REST endpoints, file lifecycle,
+authentication, storage options, deployment, error codes, best practices, and sample code) is in
+`references/api-server-guide.md`.
