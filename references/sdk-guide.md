@@ -1354,9 +1354,6 @@ Without this, the SDK will still initialise its own Log4j2 appender alongside yo
 ```java
 ISecloreSDKLogger myLogger = new SecloreLog4j2Logger(); // or Slf4j / JUL variant
 FSHelperLibrary.initialize(myLogger, appConfigXML);     // 2-arg overload
-
-// Passing null falls back to SDK's default Log4j2 logger:
-// FSHelperLibrary.initialize(null, appConfigXML);
 ```
 
 **Comparison — three logging options:**
@@ -1365,7 +1362,6 @@ FSHelperLibrary.initialize(myLogger, appConfigXML);     // 2-arg overload
 |----------|-------------------|-------------|
 | `initialize(appConfigXML)` — 1-arg | Yes — writes to `WSClient.log` via log4j2.xml | Standalone demo / app without existing logging framework |
 | `initialize(logger, appConfigXML)` — 2-arg with `ISecloreSDKLogger` | No — SDK calls your methods | Spring Boot, enterprise app, or any app that already bootstraps logging |
-| `initialize(null, appConfigXML)` — 2-arg with null | Yes — same as 1-arg fallback | Not recommended; just use 1-arg instead |
 
 ### Key Policy Server web service request types (for sendRequest)
 
@@ -1443,6 +1439,85 @@ processing; re-protect for output
 - On file upload to cloud storage: `protectAndWrap` using HF or External Reference
 - On file download for authorized users: `unwrapAndUnprotect` (standard, not elevated)
 - For compliance scanning of cloud content: Elevated EA unprotect
+
+---
+
+## 11. Checking File Protection Status
+
+There are two ways to check if a file is Seclore-protected: using the SDK (requires
+initialization) and without the SDK (pure byte-level signature detection, no SDK dependency).
+
+---
+
+### Method 1 — With SDK
+
+After SDK initialization, call the following methods on the `FSHelper` instance:
+
+| Method | Returns | What it checks |
+|--------|---------|----------------|
+| `isProtectedFile(String filePath)` | `boolean` | `true` if file is natively Seclore-protected |
+| `isHTMLWrapped(String filePath)` | `boolean` | `true` if file is an HTML-wrapped Seclore file |
+| `isSupportedFile(String filePath)` | `boolean` | `true` if file format can be Seclore-protected |
+
+```java
+FSHelper tenantObj = FSHelperLibrary.getHelper("myTenantId");
+
+boolean isProtected = tenantObj.isProtectedFile(filePath);
+boolean isWrapped   = tenantObj.isHTMLWrapped(filePath);
+boolean isSupported = tenantObj.isSupportedFile(filePath);
+```
+
+- `isProtectedFile` and `isHTMLWrapped` are mutually exclusive — a file is natively protected
+  or HTML-wrapped, never both.
+- Always call `isProtectedFile` before any protect operation, and `isHTMLWrapped` before
+  `unwrapAndUnprotect`, to prevent errors on already-protected files.
+
+---
+
+### Method 2 — Without SDK (byte-level signature detection)
+
+**Use case:** An application needs to identify Seclore-protected or wrapped files without
+integrating the SDK — for example, a content management system, storage layer, or DLP tool
+that wants to flag Seclore files without taking a Java SDK dependency.
+
+**Two detectable states:**
+- **Seclore Protected** — file is natively protected (non-HTML format)
+- **Seclore Wrapped** — file is HTML-wrapped (`.html` extension with Seclore container)
+- **Neither** — file is smaller than 64 KB, or signature not found
+
+#### Signatures
+
+| Type | Signature string |
+|------|-----------------|
+| Native protection | `FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT` |
+| HTML wrapper | `<!--FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT-->` |
+
+#### Detection algorithm
+
+1. **If file size < 64 KB** → not Seclore (return immediately)
+2. **If extension is `.html`** → read first 1 MB as UTF-8; check for the HTML wrapper signature
+3. **For all other extensions** (native protection check):
+   - Starting offset: `FILE_BYTE_START_OFFSET = 60` (KB)
+   - At each iteration: read 64 bytes at `FILE_BYTE_START_OFFSET × 1024`; compare to the
+     native signature as UTF-8
+   - If match → file is natively protected
+   - If no match: advance using the progression formula: `next = (2 × current) + 4`
+   - Stop when offset ≥ 1024 KB (1 MB)
+
+#### Buffer boundary table
+
+| Original content size | Seclore buffer size | Signature offset |
+|-----------------------|---------------------|------------------|
+| ≤ 60 KB               | 64 KB               | 60 KB            |
+| > 60 KB, ≤ 124 KB     | 128 KB              | 124 KB           |
+| > 124 KB, ≤ 252 KB    | 256 KB              | 252 KB           |
+| > 252 KB, ≤ 508 KB    | 512 KB              | 508 KB           |
+| > 508 KB, ≤ 1020 KB   | 1024 KB (1 MB)      | 1020 KB          |
+
+**Offset progression formula:** `next_offset_KB = (2 × current_offset_KB) + 4`
+
+For a complete Java implementation see `references/code-samples.md` →
+*Code Sample: Check File Protection Status*.
 
 ---
 

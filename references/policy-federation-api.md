@@ -9,6 +9,70 @@ or troubleshooting Policy Federation errors.
 
 ---
 
+## How Policy Federation Works — Two Phases
+
+Policy Federation involves two separate, independent phases. Understanding both is essential
+before implementing the ARA service.
+
+### Phase 1 — File Protection (happens once per file)
+
+```
+Integrating App                          Policy Server
+      │                                        │
+      │──── Protect file, passing ────────────►│
+      │     Application File ID as             │
+      │     External Reference ID              │  ← Access policy is already defined
+      │                                        │    in the integrating app per File ID.
+      │◄─── Seclore File ID +  ───────────────│    Policy lives in the app, not in Seclore.
+      │     Encryption Key returned            │
+      │                                        │
+      │         [PS stores: Application File ID ↔ Seclore File ID mapping]
+```
+
+What happens:
+- The integrating application calls the protect API (SDK or DRM API Server), passing its own
+  file identifier as the External Reference ID
+- Policy Server assigns a Seclore File ID, encrypts the file, and stores the mapping between
+  the application's file ID and the Seclore File ID
+- The access policy is **not stored in Seclore** — it exists only in the integrating application
+
+### Phase 2 — File Open & Dynamic Rights Resolution (happens every time a user opens the file)
+
+```
+End User          Seclore Client        Policy Server        Integrating App
+(File Recipient)                                             Rights Callback API
+      │                  │                    │                      │
+      │── Open file ────►│                    │                      │
+      │                  │── Request access ─►│                      │
+      │                  │                    │── Callback: ────────►│
+      │                  │                    │   App File ID +       │
+      │                  │                    │   User ID/Email       │
+      │                  │                    │                      │
+      │                  │                    │◄─ Rights XML ────────│
+      │                  │                    │   response:           │
+      │                  │                    │   permissions         │
+      │                  │◄── Enforced ───────│                      │
+      │                  │    rights          │                      │
+      │◄── File rendered─│                    │                      │
+```
+
+What happens:
+- The end user opens the protected file in the Seclore Client (browser or agent)
+- Seclore Client requests access from Policy Server
+- Policy Server looks up the Application File ID from its mapping and calls back to the
+  integrating application's ARA endpoint, passing the Application File ID and the user's
+  identity (email/user ID)
+- The integrating application checks its own access control system and returns the user's
+  rights as XML
+- Policy Server enforces exactly what the application returned — no more, no less
+- The Seclore Client renders the file with those rights applied
+
+**Key insight:** Rights can change at any time just by updating the application's access
+control data — no re-protection of the file is needed. The next time the user opens the
+file, the updated rights are returned.
+
+---
+
 ## What is the ARA Callback API?
 
 When a user opens a Seclore-protected file, Policy Server (PS) calls back to the integrating

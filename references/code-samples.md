@@ -1196,9 +1196,6 @@ ISecloreSDKLogger myLogger = new SecloreLog4j2Logger(); // or Slf4j / JUL varian
 
 // 2-argument overload — custom logger
 FSHelperLibrary.initialize(myLogger, appConfigXML);
-
-// Passing null falls back to SDK default Log4j2 (equivalent to 1-arg form):
-// FSHelperLibrary.initialize(null, appConfigXML);
 ```
 
 **Key rules:**
@@ -1207,3 +1204,158 @@ FSHelperLibrary.initialize(myLogger, appConfigXML);
 - `initialize(logger, xml)` (2-arg) is distinct from `initialize(xml)` (1-arg) — they are not interchangeable
 - This is a callback: the SDK calls your methods; you do not call SDK methods from within the logger
 - Subsequent SDK calls (`initializeHelper`, `getHelper`, protect, unprotect, etc.) are identical regardless of which logger variant was used
+
+---
+
+## Code Sample: Check File Protection Status
+
+Two approaches: with the SDK (requires initialization) and without (byte-level detection,
+no SDK dependency).
+
+---
+
+### With SDK
+
+```java
+import com.seclore.fs.ws.client.FSHelper;
+import com.seclore.fs.ws.client.FSHelperLibrary;
+
+public class ProtectionStatusWithSDK {
+
+    public static void main(String[] args) throws Exception {
+        String appConfigXML  = "<path-to-app-config.xml>";
+        String tenantId      = "myTenantId";
+        String tenantConfig  = "<path-to-tenant-config.xml>";
+        String filePath      = "<path-to-file>";
+
+        // Step 1: Initialize SDK
+        FSHelperLibrary.initialize(appConfigXML);
+        FSHelperLibrary.initializeHelper(tenantId, tenantConfig);
+
+        // Step 2: Get helper and check status
+        FSHelper tenantObj = FSHelperLibrary.getHelper(tenantId);
+
+        boolean isNativelyProtected = tenantObj.isProtectedFile(filePath);
+        boolean isHTMLWrapped       = tenantObj.isHTMLWrapped(filePath);
+        boolean isSupportedFormat   = tenantObj.isSupportedFile(filePath);
+
+        System.out.println("Natively protected : " + isNativelyProtected);
+        System.out.println("HTML wrapped       : " + isHTMLWrapped);
+        System.out.println("Supported format   : " + isSupportedFormat);
+
+        // Step 3: Terminate
+        FSHelperLibrary.terminate();
+    }
+}
+```
+
+---
+
+### Without SDK (byte-level signature detection)
+
+Use when the application cannot or does not want to take an SDK dependency.
+
+```java
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+
+/**
+ * Detects whether a file is Seclore-protected without using the Seclore Server SDK.
+ *
+ * Detection is based on Seclore's embedded binary signatures:
+ *   - Native protection: signature embedded at buffer-boundary byte offsets
+ *   - HTML wrapping:     HTML comment signature in the first 1 MB of the file
+ *
+ * Files smaller than 64 KB are not Seclore-protected or wrapped.
+ */
+public class SecloreProtectionDetector {
+
+    /** Signature embedded in natively protected (non-HTML) files. */
+    private static final String NATIVE_SIGNATURE =
+        "FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT";
+
+    /** Signature embedded in HTML-wrapped Seclore files. */
+    private static final String HTML_SIGNATURE =
+        "<!--FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT-->";
+
+    private static final long MIN_FILE_SIZE_BYTES = 64L * 1024; // 64 KB
+
+    public enum ProtectionStatus {
+        SECLORE_PROTECTED,  // natively protected (non-HTML format)
+        SECLORE_WRAPPED,    // HTML-wrapped Seclore file
+        NOT_SECLORE         // not protected (or file < 64 KB)
+    }
+
+    public static ProtectionStatus detect(File file) throws IOException {
+        // Files below 64 KB cannot be Seclore-protected or wrapped
+        if (file.length() < MIN_FILE_SIZE_BYTES) {
+            return ProtectionStatus.NOT_SECLORE;
+        }
+
+        String filename  = file.getName();
+        String extension = filename.contains(".")
+            ? filename.substring(filename.lastIndexOf('.') + 1).toLowerCase()
+            : "";
+
+        // HTML-wrapped files: search first 1 MB for the HTML comment signature
+        if ("html".equals(extension)) {
+            byte[] buf = readBytes(file, 0, 1024 * 1024);
+            return new String(buf, "UTF-8").contains(HTML_SIGNATURE)
+                ? ProtectionStatus.SECLORE_WRAPPED
+                : ProtectionStatus.NOT_SECLORE;
+        }
+
+        // Native protection: walk buffer-boundary offsets looking for the signature.
+        // Seclore places its signature at the start of each buffer-header block.
+        // Offset progression formula: next = (2 * current) + 4
+        // This covers buffers up to 1 MB of original content.
+        int offsetKB = 60; // first boundary at 60 KB
+        while (offsetKB < 1024) {
+            long byteOffset = (long) offsetKB * 1024;
+            if (file.length() < byteOffset) {
+                break; // file is smaller than this offset slot
+            }
+            byte[] sig = readBytes(file, byteOffset, 64);
+            if (new String(sig, "UTF-8").contains(NATIVE_SIGNATURE)) {
+                return ProtectionStatus.SECLORE_PROTECTED;
+            }
+            // Advance to next buffer boundary: 60 → 124 → 252 → 508 → 1020
+            offsetKB = (2 * offsetKB) + 4;
+        }
+
+        return ProtectionStatus.NOT_SECLORE;
+    }
+
+    /** Read {@code length} bytes from {@code file} starting at {@code offset}. */
+    private static byte[] readBytes(File file, long offset, int length) throws IOException {
+        byte[] buf = new byte[length];
+        try (FileInputStream fis = new FileInputStream(file)) {
+            long skipped = fis.skip(offset);
+            if (skipped < offset) return buf; // file ended before the offset
+            fis.read(buf, 0, length);
+        }
+        return buf;
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length == 0) {
+            System.err.println("Usage: SecloreProtectionDetector <file-path>");
+            System.exit(1);
+        }
+        File file = new File(args[0]);
+        ProtectionStatus status = detect(file);
+        System.out.println(file.getName() + " → " + status);
+    }
+}
+```
+
+**Notes:**
+- `SECLORE_PROTECTED` and `SECLORE_WRAPPED` are mutually exclusive — native protection
+  applies to non-HTML formats; HTML wrapping applies only to `.html` files.
+- At most 1 MB of any file is read, so detection is lightweight even on large files.
+- For production use, catch `IOException` and treat it as `NOT_SECLORE` (or re-throw
+  depending on your error-handling policy).
+- The algorithm covers original content up to 1020 KB. Files with larger original content
+  whose signatures land beyond 1 MB will not be detected by this method; use the SDK for
+  those cases.
