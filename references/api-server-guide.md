@@ -229,24 +229,53 @@ after unprotection to retrieve the decrypted file.
 
 > **Note:** Protected files are automatically deleted from the API Server after download.
 
-### 7.3 Get File Metadata
+### 7.3 List Files
 
 **GET** `/seclore/drm/filestorage/1.0/files`
 
-Returns metadata for all files currently stored on the API Server.
+Returns metadata for **all** files currently stored in the file storage for the logged-in
+tenant. Returns an array of `FileMetadataDTO` objects.
 
-### 7.4 Delete File
+### 7.4 Get File Info
 
-**DELETE** `/seclore/drm/filestorage/1.0/delete/{fileStorageId}`
+**GET** `/seclore/drm/filestorage/1.0/file/{fileStorageId}`
+
+Returns metadata for a **specific** file by its storage ID.
+
+| Parameter     | Type   | Required | Description                        |
+|---------------|--------|----------|------------------------------------|
+| fileStorageId | string | true     | Storage ID of the file to retrieve |
+
+**Response (200)**:
+```json
+{
+  "fileStorageId": "string",
+  "fileName": "string",
+  "downloadUrl": "string",
+  "fileType": "string",
+  "fileSize": 0,
+  "secloreFileId": "string | null",
+  "protected": true
+}
+```
+
+### 7.5 Delete File
+
+**DELETE** `/seclore/drm/filestorage/1.0/{fileStorageId}`
 
 Deletes a specific file. Use this to clean up the unprotected original after protection is
 confirmed.
 
-### 7.5 Delete All Files
+| Parameter     | Type   | Required | Description                      |
+|---------------|--------|----------|----------------------------------|
+| fileStorageId | string | true     | Storage ID of the file to delete |
 
-**DELETE** `/seclore/drm/filestorage/1.0/`
+### 7.6 Delete All Files
 
-Deletes all files from the API Server container.
+**DELETE** `/seclore/drm/filestorage/1.0`
+
+Deletes **all** files from the file storage of the currently logged-in tenant. Use with
+caution — this action cannot be undone.
 
 ---
 
@@ -481,11 +510,170 @@ Retrieve policy details by either:
 
 Returns policy name, owner, status, access right mappings, and creation metadata.
 
+**Response (200)**:
+```json
+{
+  "credentials": [
+    { "credentialId": "string", "credentialName": "string" }
+  ]
+}
+```
+
+### 11.2 Send Custom Request
+
+**POST** `/seclore/drm/1.0/sendrequest`
+
+Sends a custom XML request directly to the Policy Server configured for the logged-in
+tenant. Use this for advanced or non-standard Policy Server operations not covered by
+the other protection or permission APIs (e.g. proprietary policy queries, custom
+federation requests).
+
+Requires `Authorization: Bearer <access_token>`
+
+| Field       | Type   | Required | Description                                   |
+|-------------|--------|----------|-----------------------------------------------|
+| requestType | string | true     | The type of request to send to Policy Server  |
+| requestBody | string | false    | XML body content for the request              |
+
+**Response (200)**:
+```json
+{ "response": "<raw Policy Server XML response>" }
+```
+
+**Example**:
+```bash
+curl -X POST https://your-server/seclore/drm/1.0/sendrequest \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"requestType": "GetUserDetails", "requestBody": "<xml>...</xml>"}'
+```
+
+> Use `sendrequest` when the SDK's `FSHelper.sendRequest()` equivalent is needed via
+> the REST API — useful in environments where the Java SDK cannot be deployed directly.
+
 ---
 
-## 12. Utility APIs
+## 12. Classification APIs
 
-### 12.1 Health Check
+Apply, update, query, and remove classification labels on files. Labels are configured
+in the Policy Server and control how files are categorised for sensitivity, compliance,
+and visual marking. All endpoints require `Authorization: Bearer <access_token>`.
+
+---
+
+### 12.1 Classify File
+
+**POST** `/seclore/drm/1.0/classification/classify`
+
+Applies a classification label to a file using a `labelId` from the Policy Server.
+
+| Field             | Type    | Required | Description                                  |
+|-------------------|---------|----------|----------------------------------------------|
+| fileStorageId     | string  | true     | File to classify                             |
+| labelId           | string  | true     | Classification label ID from Policy Server   |
+| forceLabelRefresh | boolean | false    | Force refresh of label cache before applying |
+
+**Response (200)**:
+```json
+{ "fileStorageId": "string", "labelId": "string", "labelName": "string" }
+```
+
+**Example**:
+```bash
+curl -X POST https://your-server/seclore/drm/1.0/classification/classify \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"fileStorageId": "<id>", "labelId": "<label_id>"}'
+```
+
+---
+
+### 12.2 Reclassify File
+
+**POST** `/seclore/drm/1.0/classification/reclassify`
+
+Updates the label on an already-classified file. Response includes both `currentLabel`
+and `oldLabel`.
+
+| Field             | Type    | Required | Description                  |
+|-------------------|---------|----------|------------------------------|
+| fileStorageId     | string  | true     | File to reclassify           |
+| labelId           | string  | true     | New classification label ID  |
+| forceLabelRefresh | boolean | false    | Force refresh of label cache |
+
+**Response (200)**:
+```json
+{
+  "fileStorageId": "string",
+  "currentLabel": { "labelId": "string", "labelName": "string" },
+  "oldLabel":     { "labelId": "string", "labelName": "string" }
+}
+```
+
+---
+
+### 12.3 Declassify File
+
+**POST** `/seclore/drm/1.0/classification/declassify`
+
+Removes the classification label from a file. DRM protection is unaffected — only the
+label is removed. Returns `labelId: null` and `labelName: null` on success.
+
+| Field             | Type    | Required | Description                  |
+|-------------------|---------|----------|------------------------------|
+| fileStorageId     | string  | true     | File to declassify           |
+| forceLabelRefresh | boolean | false    | Force refresh of label cache |
+
+**Response (200)**:
+```json
+{ "fileStorageId": "string", "labelId": null, "labelName": null }
+```
+
+---
+
+### 12.4 Get All Classification Labels
+
+**GET** `/seclore/drm/1.0/classification/labels`
+
+Returns all labels configured in the Policy Server, including nested sublabels,
+sensitivity levels, colours, and visual markings.
+
+| Field             | Type    | Required | Description                      |
+|-------------------|---------|----------|----------------------------------|
+| fileStorageId     | string  | true     | Context file storage ID          |
+| forceLabelRefresh | boolean | false    | Force refresh of the label cache |
+
+Use `forceLabelRefresh: true` when label config changes recently; avoid in
+high-throughput paths due to cache rebuild cost.
+
+---
+
+### 12.5 Get File Classification
+
+**GET** `/seclore/drm/1.0/classification/{fileStorageId}`
+
+Returns the current classification label on a specific file.
+
+**Response (200)**:
+```json
+{ "classified": true, "classificationInfo": { ... } }
+```
+
+---
+
+### 12.6 Classification Workflow Notes
+
+- To classify during protection, pass `classificationId` in `protectionDetails` of
+  `/protect/independent`.
+- Declassification removes only the label — DRM rights remain intact.
+- `forceLabelRefresh` bypasses the server-side label cache; use sparingly.
+- Labels (`labelId`) must be pre-configured in the Policy Server before calling these APIs.
+
+---
+
+## 13. Utility APIs (App Info)
+
+### 13.1 Health Check
 
 **GET** `/seclore/drm/health`
 
@@ -505,7 +693,7 @@ Returns the health status of all three components the API Server depends on.
 `status` is `UP` only when all three components are `UP`. Use this endpoint for readiness
 probes in Kubernetes or load balancer health checks.
 
-### 12.2 Version
+### 13.2 Version
 
 **GET** `/seclore/drm/version`
 

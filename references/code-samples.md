@@ -1114,7 +1114,8 @@ public class SecloreNativeUnprotectSample {
 
 ## Code Sample: Custom Logger — ISecloreSDKLogger
 
-Use this when your application already manages its own logging framework and you want SDK logs routed through it instead of the SDK writing to its own WSClient.log.
+Use this when your application already manages its own logging framework and you want SDK
+logs routed through it instead of the SDK writing to its own `WSClient.log`.
 
 **Interface** (package: `com.seclore.fs.ws.client.logger.interfaces`):
 
@@ -1126,9 +1127,73 @@ public interface ISecloreSDKLogger extends Serializable {
 }
 ```
 
-`pRequestId` is unique per SDK operation — use it as a correlation ID to link all log lines from one protect/unprotect call.
+`pRequestId` is unique per SDK operation — use it as a correlation ID to link all log
+lines from a single protect/unprotect call.
 
-**Log4j2 implementation:**
+> **`pThrowable` can be null.** The SDK calls `logException` for both error-with-cause and
+> error-without-cause scenarios. Always guard against null before passing to your logging
+> framework.
+
+---
+
+### Production pattern — constructor-injected logger name (recommended)
+
+Passing the logger name via the constructor lets different parts of your application
+direct SDK logs to separate named loggers (e.g. one per tenant, one per service). This
+is the pattern used in Seclore's own engineering reference implementation.
+
+**Log4j2:**
+
+```java
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import com.seclore.fs.ws.client.logger.interfaces.ISecloreSDKLogger;
+
+public class SecloreSDKLogger implements ISecloreSDKLogger {
+
+    private static final long serialVersionUID = 1L; // required: ISecloreSDKLogger extends Serializable
+
+    private final Logger mLogger;
+
+    public SecloreSDKLogger(String pLoggerName) {
+        mLogger = LogManager.getLogger(pLoggerName);
+    }
+
+    @Override
+    public void logDebug(String pRequestId, String pMessage) {
+        mLogger.debug("[{}] {}", pRequestId, pMessage);
+    }
+
+    @Override
+    public void logInfo(String pRequestId, String pMessage) {
+        mLogger.info("[{}] {}", pRequestId, pMessage);
+    }
+
+    @Override
+    public void logException(String pRequestId, String pMessage, Throwable pExp) {
+        if (pExp == null) {
+            mLogger.error("[{}] {}", pRequestId, pMessage);
+        } else {
+            mLogger.error("[{}] {}", pRequestId, pMessage, pExp);
+        }
+    }
+}
+```
+
+**Wire-up:**
+```java
+// Named logger — SDK logs appear under "SecloreSDK" in your log config
+ISecloreSDKLogger sdkLogger = new SecloreSDKLogger("SecloreSDK");
+FSHelperLibrary.initialize(sdkLogger, appConfigXML);
+```
+
+---
+
+### Alternative — class-based static logger
+
+Simpler for single-tenant applications where all SDK log output goes to one logger.
+
+**Log4j2:**
 
 ```java
 import org.apache.logging.log4j.LogManager;
@@ -1136,15 +1201,32 @@ import org.apache.logging.log4j.Logger;
 import com.seclore.fs.ws.client.logger.interfaces.ISecloreSDKLogger;
 
 public class SecloreLog4j2Logger implements ISecloreSDKLogger {
+
+    private static final long serialVersionUID = 1L;
     private static final Logger log = LogManager.getLogger(SecloreLog4j2Logger.class);
 
-    @Override public void logDebug(String id, String msg)                  { log.debug("[SDK][{}] {}", id, msg); }
-    @Override public void logInfo(String id, String msg)                   { log.info("[SDK][{}] {}", id, msg); }
-    @Override public void logException(String id, String msg, Throwable t) { log.error("[SDK][{}] {}", id, msg, t); }
+    @Override
+    public void logDebug(String id, String msg) {
+        log.debug("[SDK][{}] {}", id, msg);
+    }
+
+    @Override
+    public void logInfo(String id, String msg) {
+        log.info("[SDK][{}] {}", id, msg);
+    }
+
+    @Override
+    public void logException(String id, String msg, Throwable t) {
+        if (t == null) {
+            log.error("[SDK][{}] {}", id, msg);
+        } else {
+            log.error("[SDK][{}] {}", id, msg, t);
+        }
+    }
 }
 ```
 
-**SLF4J implementation:**
+**SLF4J:**
 
 ```java
 import org.slf4j.Logger;
@@ -1152,15 +1234,32 @@ import org.slf4j.LoggerFactory;
 import com.seclore.fs.ws.client.logger.interfaces.ISecloreSDKLogger;
 
 public class SecloreSlf4jLogger implements ISecloreSDKLogger {
+
+    private static final long serialVersionUID = 1L;
     private static final Logger log = LoggerFactory.getLogger(SecloreSlf4jLogger.class);
 
-    @Override public void logDebug(String id, String msg)                  { log.debug("[SDK][{}] {}", id, msg); }
-    @Override public void logInfo(String id, String msg)                   { log.info("[SDK][{}] {}", id, msg); }
-    @Override public void logException(String id, String msg, Throwable t) { log.error("[SDK][{}] {}", id, msg, t); }
+    @Override
+    public void logDebug(String id, String msg) {
+        log.debug("[SDK][{}] {}", id, msg);
+    }
+
+    @Override
+    public void logInfo(String id, String msg) {
+        log.info("[SDK][{}] {}", id, msg);
+    }
+
+    @Override
+    public void logException(String id, String msg, Throwable t) {
+        if (t == null) {
+            log.error("[SDK][{}] {}", id, msg);
+        } else {
+            log.error("[SDK][{}] {}", id, msg, t);
+        }
+    }
 }
 ```
 
-**Java Util Logging (JUL) implementation:**
+**Java Util Logging (JUL):**
 
 ```java
 import java.util.logging.Level;
@@ -1168,15 +1267,34 @@ import java.util.logging.Logger;
 import com.seclore.fs.ws.client.logger.interfaces.ISecloreSDKLogger;
 
 public class SecloreJULLogger implements ISecloreSDKLogger {
+
+    private static final long serialVersionUID = 1L;
     private static final Logger log = Logger.getLogger(SecloreJULLogger.class.getName());
 
-    @Override public void logDebug(String id, String msg)                  { log.fine(String.format("[SDK][%s] %s", id, msg)); }
-    @Override public void logInfo(String id, String msg)                   { log.info(String.format("[SDK][%s] %s", id, msg)); }
-    @Override public void logException(String id, String msg, Throwable t) { log.log(Level.SEVERE, String.format("[SDK][%s] %s", id, msg), t); }
+    @Override
+    public void logDebug(String id, String msg) {
+        log.fine(String.format("[SDK][%s] %s", id, msg));
+    }
+
+    @Override
+    public void logInfo(String id, String msg) {
+        log.info(String.format("[SDK][%s] %s", id, msg));
+    }
+
+    @Override
+    public void logException(String id, String msg, Throwable t) {
+        if (t == null) {
+            log.severe(String.format("[SDK][%s] %s", id, msg));
+        } else {
+            log.log(Level.SEVERE, String.format("[SDK][%s] %s", id, msg), t);
+        }
+    }
 }
 ```
 
-**App Config XML — set `<initalize-logger>false</initalize-logger>` (required):**
+---
+
+**App Config XML — `<initalize-logger>false</initalize-logger>` is required:**
 
 ```xml
 <?xml version="1.0" encoding="UTF-16" ?>
@@ -1187,23 +1305,19 @@ public class SecloreJULLogger implements ISecloreSDKLogger {
 </fs-helper-config>
 ```
 
-Without `false`, the SDK still initialises its own Log4j2 appender in parallel → double-logging and possible conflicts.
+Without `false`, the SDK still initialises its own Log4j2 appender in parallel →
+double-logging and potential file lock conflicts.
 
-**Wire-up — pass to the 2-argument `initialize()` overload:**
-
-```java
-ISecloreSDKLogger myLogger = new SecloreLog4j2Logger(); // or Slf4j / JUL variant
-
-// 2-argument overload — custom logger
-FSHelperLibrary.initialize(myLogger, appConfigXML);
-```
+---
 
 **Key rules:**
-- `<initalize-logger>false</initalize-logger>` is required alongside `ISecloreSDKLogger` — without it the SDK creates `WSClient.log` in parallel
-- Interface is in package `com.seclore.fs.ws.client.logger.interfaces`
+- `serialVersionUID` must be declared — `ISecloreSDKLogger` extends `Serializable`
+- Always null-check `pThrowable`/`t` in `logException` — the SDK passes null for errors that have no underlying exception
+- `<initalize-logger>false</initalize-logger>` must be set when using a custom logger
+- Interface package: `com.seclore.fs.ws.client.logger.interfaces`
 - `initialize(logger, xml)` (2-arg) is distinct from `initialize(xml)` (1-arg) — they are not interchangeable
-- This is a callback: the SDK calls your methods; you do not call SDK methods from within the logger
-- Subsequent SDK calls (`initializeHelper`, `getHelper`, protect, unprotect, etc.) are identical regardless of which logger variant was used
+- This is a callback: the SDK calls your methods; do not call SDK methods from inside the logger
+- All subsequent SDK calls (`initializeHelper`, `getHelper`, protect, unprotect, etc.) are identical regardless of which logger variant is used
 
 ---
 
@@ -1359,3 +1473,213 @@ public class SecloreProtectionDetector {
 - The algorithm covers original content up to 1020 KB. Files with larger original content
   whose signatures land beyond 1 MB will not be detected by this method; use the SDK for
   those cases.
+
+---
+
+## Code Sample: Seclore Endpoint SDK — Invoke from Java
+
+These samples show how to invoke `SecloreActionDispatcher.exe` from a Java application using `ProcessBuilder`. The executable is shipped with Seclore Desktop Client and runs on the same Windows machine.
+
+### SecloreEndpointSDKInvoker — protect, classify, and bulk operations
+
+```java
+import java.io.*;
+import java.util.*;
+
+/**
+ * Utility class for invoking Seclore Endpoint SDK actions from Java.
+ *
+ * Prerequisites:
+ *  - Seclore Desktop Client installed on this machine and user logged in.
+ *  - For protect/protectshare/share: Desktop Client 3.12.0.0 (Seclore 3.14.4.0)+
+ *  - For classify: Desktop Client 3.19.5.0 (Seclore 3.27.5.0)+
+ *
+ * SecloreActionDispatcher.exe is shipped with the Desktop Client and available on PATH.
+ * If not on PATH, provide the absolute path to the exe.
+ */
+public class SecloreEndpointSDKInvoker {
+
+    private static final String DISPATCHER = "SecloreActionDispatcher.exe";
+
+    // -----------------------------------------------------------------------
+    // Protect — Self type
+    // -----------------------------------------------------------------------
+    public static int protectSelf(String applicationName, String filePath,
+                                   String classificationId) throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "protect",
+            "-ApplicationName", applicationName,
+            "-File",            filePath,
+            "-Type",            "self",
+            "-Classification",  classificationId
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Protect — Policy type (single or multiple Policy IDs, comma-separated)
+    // -----------------------------------------------------------------------
+    public static int protectWithPolicy(String applicationName, String filePath,
+                                         String policyIds, String classificationId)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "protect",
+            "-ApplicationName", applicationName,
+            "-File",            filePath,
+            "-Type",            "policy",
+            "-ListId",          policyIds,      // e.g. "9" or "9,1"
+            "-Classification",  classificationId
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Protect with optional IncidentId and UserId (for DLP / system context)
+    // -----------------------------------------------------------------------
+    public static int protectWithIncident(String applicationName, String filePath,
+                                           String policyIds, String classificationId,
+                                           String incidentId, String userSid)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "protect",
+            "-ApplicationName", applicationName,
+            "-File",            filePath,
+            "-Type",            "policy",
+            "-ListId",          policyIds,
+            "-Classification",  classificationId
+        ));
+        if (incidentId != null && !incidentId.isEmpty()) {
+            cmd.add("-IncidentId"); cmd.add(incidentId);
+        }
+        if (userSid != null && !userSid.isEmpty()) {
+            cmd.add("-UserId"); cmd.add(userSid);
+        }
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Classify — classify only
+    // -----------------------------------------------------------------------
+    public static int classify(String applicationName, String filePath, String labelId)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "classify",
+            "-ApplicationName", applicationName,
+            "-File",            filePath,
+            "-LabelId",         labelId
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Classify and protect (if a Seclore policy is mapped to the label)
+    // -----------------------------------------------------------------------
+    public static int classifyAndProtect(String applicationName, String filePath, String labelId)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",           "classify",
+            "-ApplicationName",    applicationName,
+            "-File",               filePath,
+            "-LabelId",            labelId,
+            "-ApplyLabelPolicies", "true"
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Classify / Reclassify (justification is mandatory when reclassifying)
+    // -----------------------------------------------------------------------
+    public static int reclassify(String applicationName, String filePath, String labelId,
+                                  String justification)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "classify",
+            "-ApplicationName", applicationName,
+            "-File",            filePath,
+            "-LabelId",         labelId,
+            "-Reclassify",      "true",
+            "-Justification",   justification
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bulk classify — all files in a folder
+    // -----------------------------------------------------------------------
+    public static int bulkClassify(String applicationName, String folderPath, String labelId)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(Arrays.asList(
+            DISPATCHER,
+            "-ActionId",        "classify",
+            "-ApplicationName", applicationName,
+            "-Folder",          folderPath,
+            "-LabelId",         labelId
+        ));
+        return run(cmd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Run command and return exit code
+    // -----------------------------------------------------------------------
+    private static int run(List<String> cmd) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+
+        // Drain stdout/stderr to avoid blocking on full pipe buffer
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println("[EndpointSDK] " + line);
+            }
+        }
+
+        int exitCode = process.waitFor();
+        System.out.println("[EndpointSDK] Exit code: " + exitCode + " | Command: " + cmd);
+        return exitCode;
+    }
+
+    // -----------------------------------------------------------------------
+    // Example usage
+    // -----------------------------------------------------------------------
+    public static void main(String[] args) throws Exception {
+        String appName = "MyDLPApp";
+
+        // 1. Self protect
+        int rc = protectSelf(appName, "C:\\testdata\\file1.txt", "1");
+        System.out.println("Self protect exit code: " + rc);
+
+        // 2. Policy protect with incident ID
+        rc = protectWithIncident(appName, "C:\\testdata\\file2.txt", "9", "1",
+                                 "DLP-INCIDENT-20240610", null);
+        System.out.println("Policy protect exit code: " + rc);
+
+        // 3. Classify and protect
+        rc = classifyAndProtect(appName, "C:\\testdata\\report.docx", "10001");
+        System.out.println("Classify and protect exit code: " + rc);
+
+        // 4. Bulk classify a folder
+        rc = bulkClassify(appName, "C:\\testdata\\reports", "10001");
+        System.out.println("Bulk classify exit code: " + rc);
+    }
+}
+```
+
+**Notes:**
+- `SecloreActionDispatcher.exe` dispatches the action asynchronously — a zero exit code means
+  the action was successfully queued, not that the file has been protected yet. Monitor the
+  `ActionExecutor.exe` logs at `C:\ProgramData\Seclore\FileSecure\Desktop Client\Logs` for
+  execution results.
+- When running in system context (Windows Service, SCCM task), always pass `-UserId` with
+  the Windows SID of the target user. Without it, the action dispatches to the last logged-in
+  user's queue, which may not be the intended target.
+- All parameters are case-sensitive in `SecloreActionDispatcher.exe`.
+- For bulk operations, `ProcessBuilder` blocks until `SecloreActionDispatcher.exe` has finished
+  queuing the action. Actual file protection/classification happens asynchronously.

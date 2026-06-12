@@ -1,20 +1,17 @@
 ---
 name: seclore-integration-assistant
 description: >
-  Expert assistant for integrating the Seclore Server SDK (Java) into applications.
-  Use when a developer asks about SDK setup, protection types, SDK methods, troubleshooting
-  errors, or generating integration code. Triggers on: Seclore SDK, FSHelper, FSHelperLibrary,
-  protectAndWrap, protectX, unwrapAndUnprotect, unprotectX, wrap, unwrap,
-  sendRequest, DefaultCryptoHandler, initializeHelper,
-  ProtectionType, PROTECT_WITH_HF, PROTECT, PROTECT_WITH_HF_EXT_REF, PROTECT_WITH_FILE_ID,
-  Hot Folder, Independent Rights, Policy Federation, ARA, getaccessright, getfileinformation,
-  primary-access-right, ARAException,
-  -2500020, Advanced Security, Advanced Privileges, Enterprise Application, EA, log4j2, WSCLIENT,
-  protect a file, unprotect a file, native protect, error code,
-  -220133, -220372, -220473, -240003, -210001, generate sample code,
-  Policy Server, DRM API Server, API Server, fileStorageId,
-  protect/hf, protect/independent, protect/externalref, DRM-1013, DRM-1105,
-  Seclore Online, fileToken, CFAD, isProtectedFile.
+  Use when a Java developer needs help integrating Seclore's rights management into an
+  application — SDK setup (FSHelper, FSHelperLibrary), protecting or unprotecting files
+  (protectAndWrap, protectX, Hot Folder, Independent Rights), building ARA/Policy Federation
+  callbacks, troubleshooting Seclore SDK error codes (-220133, -220372, -220473, -240003,
+  DRM-1013, DRM-1105, -2500020), fixing WSCLIENT or log4j2 configuration, integrating
+  Seclore Online (CFAD, proof keys, access tokens), setting up Enterprise Applications with
+  Advanced Security or Advanced Privileges, connecting DLP tools to Seclore protect/unprotect
+  APIs, checking file protection status (isProtectedFile, checkFile), file classification via
+  DRM API Server (classify/reclassify/declassify, label lookup) or BulkClassifier, or choosing
+  between DRM API Server and Policy Server. Also covers Endpoint SDK. Not for generic Java
+  encryption, non-Seclore DRM, or Seclore admin/infrastructure tasks.
 ---
 
 # Seclore Integration Assistant
@@ -27,7 +24,8 @@ samples, explaining Policy Federation and implementing its ARA callback endpoint
 developers through DRM API Server integration (authentication, file upload/protect/download
 lifecycle, REST endpoints, storage options, and best practices), and Seclore Online Integration
 (in-app file open without download, EA endpoint implementation, proof key validation, access
-token lifecycle, CFAD).
+token lifecycle, CFAD), and Seclore Endpoint SDK integration
+(SecloreActionDispatcher.exe, protect/classify/share actions, bulk classification via BulkClassifier.exe).
 
 You can also explain Seclore concepts (Policy Server, Enterprise Application, Hot Folder,
 Policy Federation, Advanced Security) in plain language for non-technical audiences.
@@ -47,6 +45,9 @@ DRM API Server integration — architecture, all REST endpoints, file lifecycle,
 error codes, and sample code — is in `references/api-server-guide.md`. Seclore Online Integration —
 use case, security model, communication flows, EA endpoints, proof key validation, access token
 lifecycle, CFAD, and design considerations — is in `references/seclore-online-guide.md`.
+Seclore Endpoint SDK integration — architecture, all actions (protect, protectshare, share,
+classify), parameters, bulk classification (BulkClassifier.exe), Mac notes, and troubleshooting —
+is in `references/endpoint-sdk-guide.md`.
 
 ---
 
@@ -772,6 +773,82 @@ boundary table: see `references/sdk-guide.md` → Section 11.
 
 ---
 
+### Mode 10 — Seclore Endpoint SDK Integration
+
+Someone is integrating a DLP tool, classification system, or discovery application with Seclore
+using `SecloreActionDispatcher.exe` (Windows) or `SecloreActionDispatcher` (Mac).
+
+Load `references/endpoint-sdk-guide.md` before responding to any question in this mode.
+
+#### Architecture
+
+The Endpoint SDK consists of two executables shipped with Seclore Desktop Client:
+
+| Executable | Role |
+|------------|------|
+| `SecloreActionDispatcher.exe` | Receives action from integrating app → pushes to queue |
+| `ActionExecutor.exe` | Picks from queue → calls Desktop Client APIs → executes |
+
+The integrating application calls `SecloreActionDispatcher.exe` synchronously; the actual file operation runs asynchronously via `ActionExecutor.exe`.
+
+#### Supported actions
+
+| Action | Windows | Mac |
+|--------|---------|-----|
+| `protect` | ✓ | ✓ |
+| `protectshare` | ✓ | ✗ |
+| `share` | ✓ | ✗ |
+| `classify` | ✓ | ✗ |
+
+#### Action summary
+
+**`protect`** — protects a file or folder using Self or Policy type. Mandatory: `-ActionId`, `-ApplicationName`, `-file` or `-folder`, `-type`, `-classification`. Add `-listId` when `-type` is `policy`.
+
+**`protectshare`** — protects and shows a sharing dialog to the end user. Same mandatory params as `protect`. Default `-DisplayResult` is `slidenotification`.
+
+**`share`** — shows sharing dialog for an already-protected file. Mandatory: `-ActionId`, `-ApplicationName`, `-file`.
+
+**`classify`** — applies a classification label. Mandatory: `-ActionId`, `-ApplicationName`, `-file` or `-folder`, `-LabelId`. Add `-ApplyLabelPolicies "true"` to also protect. Add `-Reclassify "true"` and `-Justification` to reclassify already-classified files.
+
+#### Protection types
+
+| Type | Behavior |
+|------|----------|
+| `self` | Logged-in Desktop Client user becomes owner. No other user gets access initially. Smart-Sharing via Outlook applies automatically when shared by email. |
+| `policy` | Protected with a predefined Policy ID (or comma-separated multiple IDs). Policy defines who can access, what rights, when, and from where. |
+
+#### Key parameters
+
+| Parameter | Notes |
+|-----------|-------|
+| `-IncidentId` | Correlation ID. If omitted, a random ID is generated. Use the DLP-generated incident ID to correlate. |
+| `-UserId` | Windows SID. Required when running in system context (service, SCCM) — otherwise action dispatches to last logged-in user's queue. |
+| `-ApplyLabelPolicies` | `true` triggers automatic protection if a Seclore policy is mapped to the classification label. |
+| `-Reclassify` | `true` allows reclassification. `-Justification` becomes mandatory when set. |
+| `-CreateBulkReport` | Default `true`. Generates a CSV report at `-Output` path or `~/Desktop/SecloreReports`. |
+
+#### BulkClassifier.exe
+
+A simpler wrapper for bulk classification of all files in a folder. Supports `-Folder`, `-LabelId`, `-ApplyLabelPolicies`, `-Reclassify`, `-Justification`, `-UserId`, `-IncidentId`. Can be deployed via SCCM or Active Directory.
+
+#### Prerequisites
+
+- **Protect/protectshare/share:** Desktop Client 3.12.0.0 (Seclore 3.14.4.0)+
+- **Classify:** Desktop Client 3.19.5.0 (Seclore 3.27.5.0)+
+- **Mac (protect only):** Seclore Lite for Mac 3.4.2.0 (Seclore 3.12.0.0)+
+
+#### Log locations
+
+| Component | Path |
+|-----------|------|
+| SecloreActionDispatcher.exe | `C:\ProgramData\Seclore\FileSecure\Desktop Client\Logs` |
+| ActionExecutor.exe | `C:\ProgramData\Seclore\FileSecure\Desktop Client\Logs` |
+| Mac (SecloreActionDispatcher) | `/private/var/root/Library/Application Support/Seclore/Seclore Lite/Logs` |
+
+For all parameter details, action-specific examples, and Mac known issues: see `references/endpoint-sdk-guide.md`.
+
+---
+
 ## Key Facts — Quick Answers
 
 | Question | Answer |
@@ -820,6 +897,20 @@ boundary table: see `references/sdk-guide.md` → Section 11.
 | How do I check Seclore protection status without the SDK? | Byte-level signature detection: files < 64 KB → not Seclore. HTML extension → read 1 MB, check for HTML comment signature. Other formats → walk buffer-boundary offsets (60 → 124 → 252 → 508 → 1020 KB), read 64 bytes at each, compare to native signature. See sdk-guide.md Section 11 for full algorithm. |
 | What is the Seclore native protection signature? | `FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT` — found at buffer-boundary offsets in natively protected files. |
 | What is the Seclore HTML wrapper signature? | `<!--FXIMLHDESAACAIDNUIIABMURME.DTDL.ETVPYGSOKTLOOPCNHCLIETEEROLCESNT-->` — present in the first 1 MB of HTML-wrapped files. |
+| What is the Seclore Endpoint SDK? | A CLI tool (`SecloreActionDispatcher.exe` on Windows, `SecloreActionDispatcher` on Mac) shipped with Seclore Desktop Client. Integrating apps (DLP, classification, discovery) call it to trigger Seclore actions without integrating the Java Server SDK. |
+| What two executables make up the Endpoint SDK? | `SecloreActionDispatcher.exe` — receives and queues the action. `ActionExecutor.exe` — picks from queue and calls Desktop Client APIs to execute. |
+| Which Endpoint SDK actions are supported on Mac? | Only `protect`. `classify`, `protectshare`, and `share` are Windows-only. |
+| What is the protect type "self" vs "policy" in Endpoint SDK? | `self` — logged-in user is file owner, no other user gets access initially; Smart-Sharing via Outlook grants access when shared. `policy` — uses a predefined Policy ID (or comma-separated list); all users in the policy get access. |
+| What is `-IncidentId` in Endpoint SDK? | Correlation ID for troubleshooting. Pass the DLP-generated incident ID to tie Seclore actions back to DLP incidents. If omitted, a random ID is generated. |
+| What is `-UserId` in Endpoint SDK? | Windows SID of the target user. Required when the integrating app runs in system context (service, SCCM) — otherwise the action goes to the last logged-in user's queue. |
+| What does `-ApplyLabelPolicies "true"` do? | Automatically applies protection if a Seclore policy is mapped to the classification label. Used with `classify` action. |
+| When is `-Justification` mandatory in Endpoint SDK? | Whenever `-Reclassify "true"` is passed — for both `SecloreActionDispatcher.exe classify` and `BulkClassifier.exe`. |
+| What is BulkClassifier.exe? | A wrapper exe that simplifies bulk classification of all files in a folder. Alternative to using `SecloreActionDispatcher.exe -ActionId classify -Folder ...`. Can be deployed via SCCM or Active Directory. |
+| Where are Endpoint SDK logs on Windows? | `C:\ProgramData\Seclore\FileSecure\Desktop Client\Logs` — separate log files for `SecloreActionDispatcher.exe` and `ActionExecutor.exe`. |
+| Where are Endpoint SDK logs on Mac? | `/private/var/root/Library/Application Support/Seclore/Seclore Lite/Logs` |
+| Known issue with Mac Endpoint SDK? | Simultaneous `protect` calls on the same file can result in double-protection. Serialize calls for the same file in the integrating application. |
+| Minimum Desktop Client version for Endpoint SDK protect? | 3.12.0.0 (Seclore 3.14.4.0) on Windows; Seclore Lite 3.4.2.0 (Seclore 3.12.0.0) on Mac. |
+| Minimum Desktop Client version for Endpoint SDK classify? | 3.19.5.0 (Seclore 3.27.5.0) — Windows only. |
 
 ---
 
@@ -849,3 +940,7 @@ authentication, storage options, deployment, error codes, best practices, and sa
 Seclore Online Integration (use case, security model, iFrame deprecation, communication flows,
 key concepts, all Seclore Online and EA endpoints, proof key validation, access token lifecycle,
 CFAD, design considerations, and Java sample code) is in `references/seclore-online-guide.md`.
+
+Seclore Endpoint SDK integration (architecture, protect/protectshare/share/classify actions,
+all parameters, bulk classification via BulkClassifier.exe, Mac notes, log locations, and
+troubleshooting) is in `references/endpoint-sdk-guide.md`.

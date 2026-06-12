@@ -17,6 +17,7 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 - **DRM API Server integration** — architecture, API vs SDK decision, all REST endpoints, file upload/protect/download lifecycle, authentication (JWT tokens, refresh), storage options (disk/S3/DB), deployment, error codes, best practices, and sample code in Java and curl
 - **Seclore Online Integration** — in-app file open without downloading, security model (in-memory decryption, HTTPS streaming), iFrame deprecation, EA endpoint implementation (checkFile, getFile, putFile, initEdit, edit, renewToken, open/close events), proof key validation (RSA 3-combination check), access token lifecycle (JWT generation, renewal on 401), CFAD (native desktop open), and design considerations
 - **Checking file protection status** — with SDK (`isProtectedFile`, `isHTMLWrapped`, `isSupportedFile`) and without SDK (byte-level signature detection, no SDK dependency — suitable for storage layers, DLP tools, and content management systems)
+- **Seclore Endpoint SDK** — `SecloreActionDispatcher.exe` integration for DLP/classification tools; protect (self and policy), protectshare, share, and classify actions; bulk classification via `BulkClassifier.exe`; Mac Seclore Lite support; troubleshooting and log locations
 - **Troubleshooting** — error codes `-220133`, `-220372`, `-220473`, `-240003`, `-210001`, `-2500020` and more, with specific fixes
 - **Java code samples** — complete, runnable samples for every protection and unprotection pattern
 - **Starter packages** — ask for a "starter kit" for any protection type and get a full folder with source, run scripts, config, and README
@@ -110,11 +111,15 @@ seclore-integration-assistant/
     ├── api-server-guide.md        ← DRM API Server — architecture, API vs SDK decision, all
     │                                  REST endpoints, file lifecycle, auth, storage options,
     │                                  deployment, error codes, best practices, sample code
-    └── seclore-online-guide.md    ← Seclore Online Integration — use case, security model,
-                                       iFrame deprecation, communication flows, key concepts,
-                                       all SO and EA endpoints, proof key validation,
-                                       access token lifecycle, CFAD, design considerations,
-                                       Java sample code
+    ├── seclore-online-guide.md    ← Seclore Online Integration — use case, security model,
+    │                                  iFrame deprecation, communication flows, key concepts,
+    │                                  all SO and EA endpoints, proof key validation,
+    │                                  access token lifecycle, CFAD, design considerations,
+    │                                  Java sample code
+    └── endpoint-sdk-guide.md      ← Seclore Endpoint SDK — architecture, all actions
+                                       (protect/protectshare/share/classify), parameters,
+                                       bulk classification (BulkClassifier.exe), Mac support,
+                                       log locations, troubleshooting
 ```
 
 ---
@@ -127,6 +132,7 @@ seclore-integration-assistant/
 | v1.1 | Added Policy Federation ARA callback API reference, testing guide, and troubleshooting |
 | v1.2 | Added DRM API Server integration guide — REST endpoints, file lifecycle, auth, storage options, best practices, sample code |
 | v1.3 | Added Seclore Online Integration — EA endpoint implementation, proof key validation, access token lifecycle, CFAD, security model, iFrame deprecation |
+| v1.4 | Added Seclore Endpoint SDK — SecloreActionDispatcher.exe, protect/classify/share actions, BulkClassifier.exe, Mac support, file protection detection |
 
 ---
 
