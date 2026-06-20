@@ -105,7 +105,7 @@ The standard protection flow is:
 4. Download        →  GET  /filestorage/download/{fileStorageId}
                       Returns: the protected (HTML-wrapped) file
 
-5. Delete original →  DELETE /filestorage/delete/{fileStorageId}
+5. Delete original →  DELETE /filestorage/1.0/delete/{fileStorageId}
                       (Delete the unprotected copy uploaded in step 2)
 ```
 
@@ -181,7 +181,17 @@ Explicitly invalidates both tokens (logout).
 }
 ```
 
-### 6.4 Token handling best practices
+### 6.4 Common request headers
+
+Every API endpoint accepts these headers:
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Authorization` | **Mandatory** (except `/health`, `/version`) | `Bearer <accessToken>` |
+| `X-SECLORE-REQUEST-ID` | Optional | Custom request ID for correlating log entries — useful for debugging in production |
+| `x-api-key` | Mandatory only for Seclore-hosted cloud instances | Provided by your Seclore PoC; not needed for customer-deployed instances |
+
+### 6.5 Token handling best practices
 
 - Cache the access token and reuse it across requests until it expires — do not call `/login` before every file operation
 - Implement refresh-on-401: catch `DRM-1013` (token expired), call `/refresh`, retry the original request
@@ -227,7 +237,18 @@ The file is sent as a binary multipart field (see Section 11 — File Transfer C
 Returns the file binary. Use this after protection to retrieve the HTML-wrapped file, or
 after unprotection to retrieve the decrypted file.
 
+The response includes a `Content-Disposition: attachment; filename="<originalname>.html"`
+header — use this to derive the output filename rather than hardcoding it:
+
+```python
+cd = response.headers.get("Content-Disposition", "")
+filename = cd.split("filename=")[-1].strip('"') if "filename=" in cd else "protected_file.html"
+```
+
 > **Note:** Protected files are automatically deleted from the API Server after download.
+> You get one attempt — if the download fails mid-stream, you must re-upload and re-protect.
+> Buffer the response to a temp file first, then move to the final destination to avoid
+> partial-write failures.
 
 ### 7.3 List Files
 
@@ -261,7 +282,7 @@ Returns metadata for a **specific** file by its storage ID.
 
 ### 7.5 Delete File
 
-**DELETE** `/seclore/drm/filestorage/1.0/{fileStorageId}`
+**DELETE** `/seclore/drm/filestorage/1.0/delete/{fileStorageId}`
 
 Deletes a specific file. Use this to clean up the unprotected original after protection is
 confirmed.
@@ -293,6 +314,15 @@ assigned by Policy Server:
 }
 ```
 
+> **`DL_` prefix:** The `fileStorageId` returned by all protect endpoints is always prefixed
+> with `DL_`. This prefix signals that the file will be **auto-deleted after download** —
+> it is how the API Server distinguishes protected output files from raw uploaded files in
+> storage. Upload IDs have no prefix. You can use this as a lightweight guard in your code:
+> ```python
+> if not protected_file_storage_id.startswith("DL_"):
+>     raise ValueError(f"Protect response returned unexpected ID: {protected_file_storage_id}")
+> ```
+
 ### 8.1 Protect with Hot Folder
 
 **POST** `/seclore/drm/1.0/protect/hf`
@@ -300,6 +330,11 @@ assigned by Policy Server:
 Protects the file using a pre-defined policy from a Hot Folder in Policy Server. The policy
 (who can access, what they can do) is configured centrally in PS — the application just
 supplies the Hot Folder ID.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `hotfolderId` | **Mandatory** | ID of the Hot Folder created in Policy Server |
+| `fileStorageId` | **Mandatory** | File Storage ID received from the Upload API |
 
 ```json
 {
@@ -318,10 +353,27 @@ use the same access rules). Simplest integration path.
 Protects the file with access rights defined at protection time. The application specifies
 exactly who can access the file, what rights they have, and any expiry or IP restrictions.
 
+**Parameter reference:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `protectionDetails.accessRightMappings[].entities` | **Mandatory** | Recipient email or group email to grant access to |
+| `protectionDetails.accessRightMappings[].primaryAccessRight` | **Mandatory** | Access permissions list (see table below) |
+| `protectionDetails.accessRightMappings[].offline` | **Mandatory** | Allow offline access to the document |
+| `protectionDetails.accessRightMappings[].redistribute` | **Mandatory** | Allow sharing/forwarding the document |
+| `protectionDetails.accessRightMappings[].lockToFirstMachine` | Optional | Restrict access to the first device on which the file is opened |
+| `protectionDetails.accessRightMappings[].daysSinceProtection` | Optional | Expire access N days after protection date |
+| `protectionDetails.accessRightMappings[].daysSinceFirstAccess` | Optional | Expire access N days after first open |
+| `protectionDetails.accessRightMappings[].ipRangeAccess` | Optional | Block access from specified IP ranges |
+| `protectionDetails.classification` | Optional | Seclore Classification ID string for the document |
+| `protectionDetails.credentialIds` | Optional | Comma-separated policy credential IDs |
+| `protectionDetails.ownerEmailId` | **Mandatory** | Email address of the document owner |
+| `fileStorageId` | **Mandatory** | File Storage ID received from the Upload API |
+
 ```json
 {
   "protectionDetails": {
-    "classification": "CONFIDENTIAL",
+    "classification": "your-classification-id",
     "accessRightMappings": [
       {
         "entities": [
@@ -453,22 +505,71 @@ it using the Download API.
 Returns the full access rights structure of a protected file — all users/groups, their
 rights, expiry settings, IP restrictions, Hot Folder details, and applied policies.
 
-**Response includes:**
-- `accessRightMappings` — array of all user/group permission entries
-- `ownerEmailId`
-- `secloreFileId`
-- `hotFolderDetails` — Hot Folder ID, name, external reference ID
-- `policies` — predefined policies applied to the file
+**Response body:**
+```json
+{
+  "classification": { "id": "string" },
+  "accessRightMappings": [
+    {
+      "id": "string",
+      "entity": {
+        "id": "string",
+        "repcode": 0,
+        "type": 0
+      },
+      "primaryAccessRight": ["string"],
+      "offline": true,
+      "redistribute": true,
+      "lockToFirstMachine": true,
+      "daysSinceProtection": 0,
+      "daysSinceFirstAccess": 0,
+      "ipRangeAccess": [
+        { "startIp": "string", "endIp": "string" }
+      ],
+      "creationTime": "string",
+      "lastModifiedTime": "string"
+    }
+  ],
+  "ownerEmailId": "string",
+  "secloreFileId": "string",
+  "fileName": "string",
+  "hotFolderDetails": {
+    "id": 0,
+    "name": "string",
+    "location": "string",
+    "fileServerId": "string",
+    "extnReferenceId": "string",
+    "extnRefName": "string"
+  },
+  "policies": [
+    { "policyId": 0, "policyName": "string" }
+  ]
+}
+```
+
+**Key response fields:**
+
+| Field | Description |
+|-------|-------------|
+| `classification.id` | Classification label ID applied to the file (note: nested object in response, unlike flat string in request) |
+| `accessRightMappings[].id` | ID of this access right entry — use as `accessRightId` in `removeAccessRightMappings` / `updateAccessRightMappings` |
+| `accessRightMappings[].entity.id` | User/group identifier in Policy Server |
+| `accessRightMappings[].entity.type` | Entity type (0 = user, etc.) |
+| `hotFolderDetails` | Populated when file was protected via Hot Folder or External Reference |
+| `policies` | Policies applied when protection used `credentialIds` |
 
 ### 10.2 Update File Permissions
 
 **POST** `/seclore/drm/1.0/updatefilepermission`
 
 Add, remove, or update permissions on an already-protected file without re-protecting it.
+Rights changes take effect immediately for all subsequent file opens.
 
 ```json
 {
   "secloreFileId": "SECLORE-FILE-UUID",
+  "addCredentialIds": ["policy-id-1"],
+  "removeCredentialIds": ["policy-id-2"],
   "addAccessRightMappings": [
     {
       "entity": [{ "emailId": "newuser@example.com", "type": "user" }],
@@ -476,25 +577,59 @@ Add, remove, or update permissions on an already-protected file without re-prote
       "offline": false,
       "redistribute": false,
       "lockToFirstMachine": false,
-      "daysSinceProtection": null,
-      "daysSinceFirstAccess": null,
-      "ipRangeAccess": []
+      "daysSinceProtection": 0,
+      "daysSinceFirstAccess": 0,
+      "ipRangeAccess": [{ "startIp": "string", "endIp": "string" }]
     }
   ],
   "removeAccessRightMappings": [
     {
       "entity": [{ "emailId": "olduser@example.com", "type": "user" }],
+      "primaryAccessRight": ["read"],
+      "offline": true,
+      "redistribute": true,
+      "lockToFirstMachine": false,
+      "daysSinceProtection": 0,
+      "daysSinceFirstAccess": 0,
+      "ipRangeAccess": [],
       "accessRightId": "access-right-mapping-id"
     }
   ],
-  "updateAccessRightMappings": [],
-  "addCredentialIds": [],
-  "removeCredentialIds": []
+  "updateAccessRightMappings": [
+    {
+      "entity": [{ "emailId": "existinguser@example.com", "type": "user" }],
+      "primaryAccessRight": ["read", "print"],
+      "offline": false,
+      "redistribute": false,
+      "lockToFirstMachine": false,
+      "daysSinceProtection": 30,
+      "daysSinceFirstAccess": 0,
+      "ipRangeAccess": [],
+      "accessRightId": "access-right-mapping-id"
+    }
+  ]
 }
 ```
 
-This is a powerful post-protection operation — rights changes take effect immediately for
-all subsequent file opens.
+**Parameter notes:**
+
+| Field | Description |
+|-------|-------------|
+| `secloreFileId` | Seclore File ID of the document to modify (from protect response or Get File Permissions) |
+| `addCredentialIds` | Policy IDs to attach to the document |
+| `removeCredentialIds` | Policy IDs to detach from the document |
+| `addAccessRightMappings` | New user/group entries to add |
+| `removeAccessRightMappings` | Entries to remove — include `accessRightId` (the `id` from Get File Permissions response) to target the exact mapping |
+| `updateAccessRightMappings` | Existing entries to modify — include `accessRightId` to identify which mapping to update |
+
+> **Tip:** Always call Get File Permissions first to retrieve the `accessRightMappings[].id`
+> values needed in `removeAccessRightMappings.accessRightId` and
+> `updateAccessRightMappings.accessRightId`.
+
+**Success response:**
+```json
+{ "response": "Update is made successfully" }
+```
 
 ---
 
@@ -508,16 +643,50 @@ Retrieve policy details by either:
 - A **user email address** — returns all policies mapped to that user
 - A **policy ID** — returns details of a specific policy
 
-Returns policy name, owner, status, access right mappings, and creation metadata.
-
 **Response (200)**:
 ```json
 {
   "credentials": [
-    { "credentialId": "string", "credentialName": "string" }
+    {
+      "id": "string",
+      "name": "string",
+      "owner": {
+        "type": "string",
+        "container": {
+          "repCode": "string",
+          "id": "string",
+          "code": "string"
+        }
+      },
+      "description": "string",
+      "status": "string",
+      "locked": "string",
+      "creationTime": "string",
+      "lmTime": "string",
+      "createdBy": { "entity": { "id": "string", "repcode": 0, "type": 0 } },
+      "lmBy":      { "entity": { "id": "string", "repcode": 0, "type": 0 } },
+      "defaultApplicable": "string",
+      "details": {
+        "accessRightMappings": [
+          {
+            "entity": { "id": "string", "repcode": 0, "type": 0 },
+            "primaryAccessRight": ["string"],
+            "offline": 0,
+            "redistribute": 0,
+            "LockToFirstMachine": 0,
+            "daysSinceProtection": 0,
+            "daysSinceFirstAccess": 0,
+            "ipRangeAccess": [{ "startIp": "string", "endIp": "string" }]
+          }
+        ]
+      }
+    }
   ]
 }
 ```
+
+Use `credentials[].id` as the `credentialId` when passing policies to `addCredentialIds` /
+`removeCredentialIds` in the Update Permission API.
 
 ### 11.2 Send Custom Request
 
@@ -663,8 +832,10 @@ Returns the current classification label on a specific file.
 
 ### 12.6 Classification Workflow Notes
 
-- To classify during protection, pass `classificationId` in `protectionDetails` of
-  `/protect/independent`.
+- To classify during protection, pass `"classification": "<labelId>"` (plain string) inside
+  `protectionDetails` of `/protect/independent`. Note: the *response* from Get File Permissions
+  returns classification as `{ "id": "string" }` — this is the Policy Server's XML structure
+  reflected in the response, distinct from the flat string used in the request.
 - Declassification removes only the label — DRM rights remain intact.
 - `forceLabelRefresh` bypasses the server-side label cache; use sparingly.
 - Labels (`labelId`) must be pre-configured in the Policy Server before calling these APIs.
@@ -890,7 +1061,32 @@ Contact your Seclore implementation team for the full deployment guide.
 - Restrict API Server → Policy Server traffic to port 443 from the API Server's IP only
 - Use TLS 1.2 or higher for all connections
 
-### 17.2 Performance
+### 17.2 URL Construction
+
+A common integration bug is duplicating the base path. If `base_url` already contains
+`/seclore/drm/`, appending `seclore/drm/1.0/protect/hf` produces a doubled path that
+returns a 404.
+
+**Safe pattern — keep base_url as the host only:**
+
+```python
+BASE_URL = "https://drmapi.example.com"   # no trailing path
+protect_url = f"{BASE_URL}/seclore/drm/1.0/protect/hf"
+upload_url  = f"{BASE_URL}/seclore/drm/filestorage/1.0/upload"
+```
+
+**If base_url already includes the prefix** (e.g., from config), append only the
+version-relative segment:
+
+```python
+BASE_URL = "https://drmapi.example.com/seclore/drm/"  # note trailing /
+protect_url = f"{BASE_URL}1.0/protect/hf"
+```
+
+Check every endpoint in your integration for the same duplication — upload, protect,
+download, and delete calls are all equally susceptible.
+
+### 17.3 Performance
 
 **Token caching:**
 - Cache the access token in memory and reuse it for its full 15-minute lifespan

@@ -17,6 +17,8 @@
 8. [Access Rights Reference](#8-access-rights-reference)
 9. [SDK API Quick Reference](#9-sdk-api-quick-reference)
 10. [Integration Verticals — Common Patterns](#10-integration-verticals--common-patterns)
+11. [Checking File Protection Status](#11-checking-file-protection-status)
+12. [Querying File Protection Details and User Access Permission](#12-querying-file-protection-details-and-user-access-permission)
 
 ---
 
@@ -1374,6 +1376,8 @@ FSHelperLibrary.initialize(myLogger, appConfigXML);     // 2-arg overload
 | 66 | Protect file using external reference (Policy Federation) |
 | 74 | Look up user/entity by email or login ID |
 | 100 | Configure Advanced Security for EA |
+| 29 | Get full protection details of an already-protected file (see Section 12) |
+| 31 | Get a specific user's access permission on a file — requires entity `rep-code`+`id` (see Section 12) |
 
 ### XML namespaces used by Policy Server
 
@@ -1518,6 +1522,236 @@ that wants to flag Seclore files without taking a Java SDK dependency.
 
 For a complete Java implementation see `references/code-samples.md` →
 *Code Sample: Check File Protection Status*.
+
+---
+
+## 12. Querying File Protection Details and User Access Permission
+
+Two `sendRequest()` types let you query an already-protected file instead of changing its
+protection: Type 29 returns the file's overall protection details; Type 31 returns one
+specific user's access rights on that file.
+
+---
+
+### Type 29 — Get File Protection Details (`sendRequest`, type 29)
+
+Returns the full protection record for an already-protected file: classification, owner,
+protector, hot-folder mapping, and either the credential mapping or the independent
+access-right mappings, depending on how the file was protected.
+
+**You need the file's Seclore File ID first.** Two ways to get it:
+
+- **From a prior protect call's return value** — `protectAndWrap`/`protectX` returns the
+  Seclore File ID at protection time; if your code already captured that, use it directly.
+- **From the file path, when you only have the file on disk:**
+
+```java
+String fileId = tenantObj.getFileId(filePath);
+```
+
+**Request:**
+
+```xml
+<request>
+  <request-header/>
+  <request-details>
+    <file-details>
+      <file-id>SECLORE_FILE_ID</file-id>
+      <file-name>FILE_NAME</file-name>
+    </file-details>
+    <verbose>1</verbose>
+  </request-details>
+</request>
+```
+
+```java
+String responseXML = tenantObj.sendRequest(null, 29, requestXML);
+```
+
+**`<verbose>` controls how much comes back — pick deliberately, it doesn't error either way:**
+
+- **`verbose=1`** — full detail: file-level `<protection-details>` is present, with the
+  complete credential/access-right mappings and the full owner entity (name + email).
+- **`verbose=0`** — summary only: file-level `<protection-details>` is **absent**. If the file
+  is Hot-Folder-protected, `<hot-folder>` still carries its own `<protection-details>` with
+  classification and the HF owner — that part doesn't depend on the verbose flag.
+
+**Response structure (key elements):**
+
+| Element | Contains |
+|---|---|
+| `<file-details><file-name>` | original filename at protection time |
+| `<file-details><irm-aware>` | always `1` for a Seclore-protected file |
+| Top-level `<owner>/<entity>`, `<protector>/<entity>` | **minimal** entity (id + rep-code + type only) — full name/email is in `<protection-details><owner>`, not here |
+| `<protection-details><classification><name>` | classification label applied — verbose=1 only |
+| `<protection-details><owner>` (use the **last** `<owner>` block) | full owner entity (name + email) — verbose=1 only; see parsing gotcha #1 below |
+| `<protection-details><file-credential-mappings>` | populated for Hot Folder / Predefined Policy ID protection — lists each credential (id, name, status) and how it was granted |
+| `<protection-details><file-access-right-mappings><file-access-right-mapping><access-right><primary-access-right>` | populated for Independent Rights protection — one mapping per user/group with distinct rights (see Section 8 for the bitmask legend) |
+| `<hot-folder><name>` | hot-folder name — present only if the file was protected via Hot Folder |
+| `<hot-folder><file-server><id>` | the Enterprise Application (EA) id that owns the Hot Folder |
+| `<hot-folder><extn-reference><extn-ref-id>` | the Hot Folder's own external reference ID |
+| Root-level `<extn-reference>` (after `</hot-folder>`) | the **file's** external reference ID — only present for files protected via `PROTECT_WITH_HF_EXT_REF`; see parsing gotcha #3 |
+
+**Important — which mapping list populates (and what else comes with it) depends on how the
+file was protected. At most one of the two mapping lists is non-empty:**
+
+| Protection type | `<file-credential-mappings>` | `<file-access-right-mappings>` | `<hot-folder>` |
+|---|---|---|---|
+| Hot Folder | Populated (HF credential) | Empty | Present |
+| Predefined Policy ID | Populated | Empty | May be present |
+| Independent Rights | Empty/absent | Populated (per-user rights) | Absent |
+
+If you need "does this specific user have access," and the file uses Hot Folder/Predefined
+Policy protection, Type 29 won't show you that user directly — use Type 31 instead (below).
+
+**Four parsing gotchas — these are easy to get wrong silently rather than via an error:**
+
+1. **File-level owner is the *last* `<owner>` block, not the first.** In verbose=1, the first
+   `<owner>` inside `<protection-details>` belongs to the `<credential>` and has no entity
+   detail. The file-level owner — with full name/email — is the *last* `<owner>` block in that
+   section. Grab it with something like `extractLastBlock(protectionDetailsBlock, "owner")`.
+2. **`<hot-folder>` appears twice in verbose=1.** A minimal stub shows up nested inside
+   `<granted-by>`; the real, full top-level `<hot-folder>` comes later in the response. Use
+   `extractLastBlock(response, "hot-folder")` to get the right one.
+3. **`<extn-reference>` appears twice and means different things each time.** Once inside
+   `<hot-folder>` (the Hot Folder's own external reference) and once at the response root after
+   `</hot-folder>` (the file's external reference, `PROTECT_WITH_HF_EXT_REF` only). Parse these
+   as two separate fields — don't assume the first match is the one you want.
+4. **`<hot-folder>` may be absent entirely.** It's only present for Hot-Folder-protected files
+   (and sometimes for Predefined Policy ID). Check for its presence before parsing into it —
+   don't assume it's always there.
+
+---
+
+### Type 31 — Get a User's Access Permission (`sendRequest`, type 31)
+
+Returns one specific user's effective access rights on a file — the right answer to "can
+user X access this file, and what can they do."
+
+#### What the request needs — entity `id`, not email
+
+The request identifies the user with an `<entity>` block requiring `<rep-code>` and `<id>`:
+
+```xml
+<request>
+  <request-header/>
+  <request-details>
+    <file-details>
+      <file-id>SECLORE_FILE_ID</file-id>
+      <file-name>FILE_NAME</file-name>
+    </file-details>
+    <entity>
+      <rep-code>REP_CODE</rep-code>
+      <id>ENTITY_ID</id>
+    </entity>
+  </request-details>
+</request>
+```
+
+- `rep-code` — the Repository (e.g. AD/LDAP directory) the user belongs to in Policy Server.
+- `id` — the entity's actual unique identifier in that repository (a GUID/SID-style value),
+  **not** the email address and not `<ext-id>`. Sending email here fails with
+  `-240003 Missing parameter 'id'.`
+
+**If you only have the user's email, resolve it first with Type 74** (the same lookup used
+elsewhere in this skill for Independent Rights — see Section 2):
+
+```xml
+<request>
+  <request-header/>
+  <request-details>
+    <email-id>user@example.com</email-id>
+  </request-details>
+</request>
+```
+
+```java
+String responseXML = tenantObj.sendRequest(null, 74, lookupXml);
+// parse <entities><entity><rep-code>...</rep-code><id>...</id></entity></entities>
+```
+
+Take the `rep-code` and `id` from the returned `<entity>` and use them in the Type 31 request.
+If the lookup returns no `<entities>` (or `-220372`), the user doesn't exist in Policy Server.
+
+> Querying another user's access permission this way is expected to require the EA/session to
+> have the SUPER USER role on Policy Server. If Type 31 fails with a permission-style error,
+> that's the likely cause — check the EA's role configuration in Policy Server.
+
+#### Response structure
+
+```xml
+<response>
+  ...
+  <request-status><return-value>1</return-value>...</request-status>
+  <access-permissions>
+    <online><permission>
+      <primary-access-right>N</primary-access-right>
+      <offline>0|1</offline>
+      <validity-start-time>...</validity-start-time>
+      <validity-end-time>...</validity-end-time>
+    </permission></online>
+    <redistribute><permission>...</permission></redistribute>
+    <offline><permissions><permission>...</permission></permissions></offline>
+    <redistribute-online><permission>...</permission></redistribute-online>
+    <redistribute-offline><permission>...</permission></redistribute-offline>
+  </access-permissions>
+  <protection-details>...</protection-details>
+  <file-details>...</file-details>
+</response>
+```
+
+**`<request-status><return-value>1</return-value>` only means the request itself succeeded —
+it is not an indicator of whether the user has access.** Whether the user can actually open
+the file is determined entirely by the contents of `<access-permissions>`.
+
+#### Interpreting `<primary-access-right>` in plain English
+
+Use the same decimal legend as Section 8 (Access Rights Reference):
+
+| Decimal | Right |
+|---|---|
+| 2 | Read |
+| 6 | Lite Viewer |
+| 10 | Print |
+| 34 | Edit |
+| 170 | Full Control |
+| 258 | Copy Data |
+| 514 | Screen Capture |
+| 1026 | Macro |
+
+A value of **1** does not correspond to any named right in that table — in practice it shows
+up as the baseline value for a permission block the user has *not* been granted (see the
+worked comparison below). Treat `1` as "no right granted for this access mode," and any value
+≥ 2 as a real (or combined, via bitwise OR) right from the table.
+
+#### Worked example: has permission vs. no permission
+
+Two real responses for the same file (`Test.pdf.html`, file-id `1000362117`), same protector,
+same classification — only `<access-permissions>` differs:
+
+**User with no access** — every permission block (`online`, `redistribute`, `offline`,
+`redistribute-online`, `redistribute-offline`) reads:
+```xml
+<primary-access-right>1</primary-access-right>
+...
+<validity-end-time>-1</validity-end-time>
+```
+Uniform `1` / `-1` across all five blocks → no granted access of any kind.
+
+**User with access** — the `online` and `offline` blocks read:
+```xml
+<primary-access-right>2</primary-access-right>
+...
+<validity-end-time>9000000</validity-end-time>
+```
+`2` = Read, and the validity end time is a real (non-sentinel) value — this user can open the
+file online and offline with Read rights. The `redistribute`, `redistribute-online`, and
+`redistribute-offline` blocks in this same response stayed at the baseline `1`/`-1` — this
+user was not granted redistribute rights.
+
+**Reading rule:** for each of the five permission blocks, `primary-access-right >= 2` (matched
+against the Section 8 table) means the user has that right for that access mode; `1` means
+they don't.
 
 ---
 
