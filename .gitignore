@@ -1,0 +1,5 @@
+Seclore-Integration-Assistant-Skill.zip
+*.skill
+evals/
+push-skill-update.bat
+*.tmp
