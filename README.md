@@ -6,6 +6,15 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 
 ---
 
+## Installing in Claude Cowork
+
+1. Clone or download this repository
+2. In Claude, Go to Settings → Capabilities → Skills → Customize → Upload a skill
+3. Import the zip to use the skill
+4. The skill will be available as `/seclore-integration-assistant`
+
+---
+
 ## What it covers
 
 - **SDK setup** — required JARs, log4j2.xml configuration, initialization sequence, App Config and Tenant Config XML
@@ -21,15 +30,6 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 - **Troubleshooting** — error codes `-220133`, `-220372`, `-220473`, `-240003`, `-210001`, `-2500020` and more, with specific fixes
 - **Java code samples** — complete, runnable samples for every protection and unprotection pattern
 - **Starter packages** — ask for a "starter kit" for any protection type and get a full folder with source, run scripts, config, and README
-
----
-
-## Installing in Claude Cowork
-
-1. Clone or download this repository
-2. In Claude, Go to Settings → Capabilities → Skills → Customize → Upload a skill
-3. Import the zip to use the skill
-4. The skill will be available as `/seclore-integration-assistant`
 
 ---
 
