@@ -1,6 +1,6 @@
 # Seclore Integration Assistant
 
-A Claude AI skill that helps developers and architects integrate the **Seclore Server SDK (Java)**, **DRM API Server**, and **Seclore Online** into their applications.
+A Claude AI skill that helps developers and architects integrate the **Seclore Server SDK (Java)**, **Seclore API Server**, **Seclore Endpoint SDK**, and **Seclore Online** into their applications.
 
 Ask it questions about SDK setup, protection types, method signatures, REST endpoints, Seclore Online callback implementation, error codes, and get ready-to-run Java code samples — all without digging through Javadocs or trial-and-error.
 
@@ -80,6 +80,10 @@ What is CFAD and how do I trigger it?
 Why was iFrame support deprecated in Seclore Online?
 
 How does access token renewal work in Seclore Online?
+
+Can I initialize SDK with 2 different EA or Policy Server?
+
+Can I initialize SDK using and end user or individual user credential?
 ```
 
 ---
