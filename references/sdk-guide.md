@@ -148,8 +148,9 @@ calling `protectAndWrap()`. The flow is:
 
 1. Call `sendRequest()` **(Type 74)** with the user's email to query PS and retrieve
    their entity ID.
-2. For external user, if the user does not exist in PS, call `sendRequest()` **(Type 109)** to create
-   the user first. User gets created in Seclore FIM.
+2. If the user does not exist in PS, call `sendRequest()` **(Type 109)** to create
+   the user first — see the code sample below for the exact request shape, including the
+   mandatory `referrer-email-id`. User gets created in Seclore FIM.
 3. Build the Independent Rights XML using the entity IDs returned.
 4. Call `protectAndWrap()` with the constructed XML.
 
@@ -424,6 +425,39 @@ This shows the exact JVM binary in use. Import the cert into that JVM's `cacerts
 
 ---
 
+### "Missing parameter '&lt;field&gt;'" on Admin Ops create/update requests (-240003)
+
+- **Cause:** A mandatory field inside `<file-server>`/`<credential>`/`<hot-folder>` (Create/Update EA,
+  Hot Folder, Policy — types 22/24/44/47/49/50) was sent empty. The error names the field directly,
+  e.g. `Missing parameter 'machine-id'.`
+- **Example (type 44, Create EA):** sending `<machine-id></machine-id>` empty returns
+  exactly this error. Same -240003 code as the Hot Folder/Independent Rights scenarios above, but a
+  different cause — check the error-message text, not just the code, to tell them apart.
+- **Fix:** Populate the named field. For `machine-id`/`machine-host-name` on Create EA, neither field
+  is shown anywhere in the Policy Server admin UI — any non-empty placeholder value is accepted, the
+  server does not validate it against a real machine.
+
+---
+
+### "Invalid Policy Server identifier '&lt;value&gt;'" (-200023)
+
+- **Cause:** `<ps-id>` is missing, empty, or in the wrong format. This has been seen on Create EA
+  (type 44) and is the relevant error to check for on any Admin Ops request that includes `<ps-id>`
+  (also appears in Create/Update Hot Folder, types 49/50 — format not independently confirmed
+  there, but treat it the same way until tested).
+- **On type 44 (Create EA):**
+  - Empty `<ps-id></ps-id>` → `Invalid Policy Server identifier 'null'.`
+  - The Policy Server's hex id alone (e.g. `d6413e9316c611638cb48706ced92c4a0bc9ba60`) →
+    `Invalid Policy Server identifier 'd6413e9316c611638cb48706ced92c4a0bc9ba60'.` — the hex id by
+    itself is rejected.
+  - The **full label exactly as shown in the Policy Server admin console**,
+    `"<Display Name> (<hex-id>)"` — e.g. `"AWS Cloud PoC-50 PolicyServer
+    (d6413e9316c611638cb48706ced92c4a0bc9ba60)"` — succeeded.
+- **Fix:** Copy the entire Policy Server label string from the admin console (name, space, hex id in
+  parentheses) into `<ps-id>` verbatim. Do not extract just the hex portion.
+
+---
+
 ### "User is not authenticated with the Enterprise Application 'X'" (-220133)
 
 Four scenarios. The EA number in the error message is the clue:
@@ -477,11 +511,19 @@ Four scenarios. The EA number in the error message is the clue:
 
 ### "Failed to parse RSA Key XML" / "Failed to fetch Session Key"
 
-- **Cause:** The private key XML format is invalid (usually happens after manually editing
-  `config/keypair.properties`).
-- **Fix:** Delete `config/keypair.properties`, regenerate the key pair with the Generate
-  button in the demo, re-register the new public key in Policy Server, enter the new Active Key ID,
-  re-initialize.
+- **Cause:** The private key XML your code holds doesn't match the public key currently
+  registered against the Active Key ID on Policy Server for this EA — typically because the
+  key pair was rotated on one side (Policy Server or your code) but not the other.
+- **Fix (custom SDK integration):** The public key is derivable directly from your private
+  key's RSA modulus and exponent — you don't need any special tooling to produce it. Register
+  that public key against the EA in Policy Server (admin console, or programmatically via
+  `sendRequest` type 100 — Configure Advanced Security), read back the Active Key ID Policy
+  Server assigns, and reinitialize `DefaultCryptoHandler` with the matching private key XML and
+  new Active Key ID.
+- **If you're using the Seclore demo app** (not a custom integration): its key management is
+  separate — it stores the pair in `config/keypair.properties` and regenerates it via the
+  "Generate RSA Key Pair" button in its Configuration tab. That file and button are specific to
+  the demo app's own workflow and don't apply to a custom SDK integration.
 
 ---
 
@@ -503,13 +545,39 @@ Four scenarios. The EA number in the error message is the clue:
 
 ---
 
+### "Invalid value '' specified for parameter '<field>'" (-210002)
+
+- **Cause:** the field was sent non-empty, but the server rejected the actual value (not a
+  missing-field case — that's `-240003`). On type 44 (Create EA):
+  `<type>1</type>` and `<type>2</type>` both returned this error, while `<type>3</type>`
+  succeeded.
+- **Why:** this is not a license/tenant restriction. The Server SDK
+  always creates a **virtual** Enterprise Application; only `type=3` (Custom EA) represents
+  a virtual EA. `type=1` (Server EA) and `type=2` (Desktop EA) are **physical** EAs (a
+  physical EA is typically a NAS location) and are not creatable through this SDK call at
+  all, regardless of license. **Generalize this:** any SDK-driven Create EA (type 44) call
+  should always send `<type>3</type>`.
+- **Gotcha:** the error message itself quotes an **empty** value (`''`) regardless of what was
+  actually sent — it does not echo back the rejected value. Don't read the quoted text as
+  confirmation of what you sent; check your own request XML instead.
+- **Fix:** always send `<type>3</type>` on Create EA via the SDK. Types 1/2 are not an SDK
+  feature — physical EAs are configured a different way (outside SDK scope), not by passing
+  a different `type` value here.
+
+---
+
 ### Error code quick reference
 
 | Code | Meaning |
 |------|---------|
+| -200023 | Invalid Policy Server identifier — `<ps-id>` missing, empty, or sent as hex-id-only instead of the full "name (hex-id)" label (seen on type 44) |
+| -210002 | Invalid value `''` specified for parameter `<field>` — field was non-empty but the value was rejected. On Create EA (type 44), `type=1`/`2` always fail this way — the SDK only creates virtual EAs (`type=3`); types 1/2 are physical EAs and aren't an SDK feature. The quoted value in the message is always empty regardless of what was sent — don't trust it. |
 | -220001 | EA authentication failed (wrong ID or passphrase) |
 | -220133 | EA not authorized for this operation |
-| -240003 | User/owner not found in repository — OR — Hot Folder `<id>` element is empty (check log for "Missing parameter 'id'") |
+| -220370 | Search User (type 74): neither `login-id` nor `email-id` was provided. Exactly one is required. |
+| -220371 | Search User (type 74): both `login-id` and `email-id` were provided in the same request. Send exactly one, not both. |
+| -220402 | Create Policy (type 22): `owner.type=1` was set to an individual user. Custom (User-owned) Policy creation isn't achievable via the SDK regardless of which user or session privileges — use `owner.type=2` (Container/OU) instead. |
+| -240003 | User/owner not found in repository — OR — Hot Folder `<id>` element is empty — OR — a mandatory Admin Ops field (e.g. `machine-id`, `machine-host-name`, `type` on type 44) was sent empty. Error-message names the missing field; check that text to tell the causes apart. |
 | -240004 | Hot Folder not found |
 | -240005 | Hot Folder not accessible to EA |
 | -240006 | File format not supported |
@@ -704,27 +772,46 @@ public void protectWithIndependentRights(
 
 **Getting entity IDs from email addresses** (required before building the XML above):
 ```java
-// Look up user by email — Policy Server request type 74
-// Returns String[] { id, repCode, type } on success, or -220372 (int) if not found
+// Look up user by email — Policy Server request type 74.
+// sendRequest() always returns the response XML as a String — never a String[]; parse
+// <entities><entity> out of it, same as every other request type.
 String lookupXml =
-    "<search-user>" +
-    "  <email>" + email + "</email>" +
-    "</search-user>";
+    "<request><request-header/><request-details>" +
+    "  <email-id>" + email + "</email-id>" +
+    "</request-details></request>";
 
-Object searchResult = tenantObj.sendRequest(null, 74, lookupXml);
-if (searchResult instanceof String[]) {
-    String[] entity = (String[]) searchResult; // [id, repCode, type]
+String responseXML = tenantObj.sendRequest(null, 74, lookupXml);
+// parse <request-status><return-value>, then <entities><entity><id>/<rep-code>/<type>
+boolean found = responseXML.contains("<entity>");
+if (found) {
+    // extract id / rep-code / type from the <entity> block
 } else {
-    // -220372 = not found; create the user with request type 109
+    // return-value negative (e.g. -220372) or empty <entities> = not found.
+    // Create the user — request type 109. email-id, requestor-comments,
+    // and referrer-email-id are all mandatory. referrer-email-id must be the email of an
+    // ALREADY-EXISTING Policy Server user (any existing user works — it doesn't have to be
+    // an EA or admin); a missing referrer-email-id fails with -210001, an empty/invalid one
+    // fails with -220517. rep-code is optional — if omitted, Policy Server auto-assigns the
+    // new user to its Internal or External Users repository based on the email's domain.
     String createXml =
-        "<create-user>" +
-        "  <email>" + email + "</email>" +
-        "  <first-name>" + email.split("@")[0] + "</first-name>" +
-        "  <last-name>User</last-name>" +
-        "</create-user>";
-    String[] entity = (String[]) tenantObj.sendRequest(null, 109, createXml);
+        "<request><request-header/><request-details>" +
+        "  <im-user>" +
+        "    <email-id>" + email + "</email-id>" +
+        "    <requestor-comments>" + comments + "</requestor-comments>" +
+        "    <referrer-email-id>" + referrerEmail + "</referrer-email-id>" +
+        "  </im-user>" +
+        "</request-details></request>";
+    String createResponseXML = tenantObj.sendRequest(null, 109, createXml);
+    // returns the response XML as a String (not a String[]) — same pattern as every other
+    // request type. On success, parse the new user's id/rep-code out of <im-user> in the
+    // response.
 }
 ```
+
+Instead of `<email-id>`, you can send `<login-id>` (confirmed to behave identically — send
+exactly one, never both). Sending both `<login-id>` and `<email-id>` in the same request fails
+with `-220371 "Both Email Id and Login Id found for search"`; sending neither fails with
+`-220370 "Email Id/Login Id is missing."`
 
 **Policy Server requirement:** EA must be created in Policy Server and used for initialization of the SDK.
 
@@ -816,16 +903,46 @@ protected by any EA or user.
 
 #### Step 1: Generate RSA key pair and register with Policy Server
 
+**`DefaultCryptoHandler.generateKeyPair()` is not an SDK method.** It does not exist on
+`DefaultCryptoHandler` or anywhere else in the SDK jar (confirmed via `javap` against both
+`DefaultCryptoHandler` and `FSHelperLibrary`). The name describes what the **Seclore demo
+app's UI** does internally when you click "Generate RSA Key Pair" in its Configuration tab
+(see Section 7, Part A below) — it is not a method your own code can call. Generating the
+private key in the SDK's proprietary hex-XML format (the format `DefaultCryptoHandler`'s
+constructor requires) is only confirmed achievable through that demo-app UI button; there is
+no live-confirmed SDK or external-tooling path to produce that exact format independently.
+
+Registering the resulting public key with Policy Server, however, does **not** require the
+manual "paste into admin console" step — that part can be fully automated from your own code
+using **Type 100 (Configure Advanced Security)**:
+
 ```java
-// Generate key pair (do once, save to config)
-DefaultCryptoHandler.generateKeyPair(
-    "config/keypair.properties",  // save location
-    2048                          // key size
+// pubKeyX509Der must be the public key as a Base64-encoded X.509 SubjectPublicKeyInfo (DER).
+// keyLength is always 256 for this request, regardless of the RSA modulus size in bits —
+// it mirrors DefaultCryptoHandler's own keyLength constructor parameter, not the key's bit
+// length. clid must be the literal fixed string "com.seclore.fs.ws" — any other value fails
+// with -220655. key-id is server-assigned: Policy Server ignores whatever you send (even a
+// well-formed UUID) and returns its own generated value — read it back from the response or
+// a follow-up Type 45 call, then use THAT value as the Active Key ID below. Policy Server
+// does NOT verify that the submitted public key matches any specific private key at this
+// step — it stores whatever syntactically valid key data is given, so keeping the
+// public/private pair actually matched is the caller's responsibility; a mismatch will not
+// surface until the first authenticated call fails its crypto handshake.
+String responseXml = SecloreConfigureAdvSecurity.configure(
+    helper, psId, eaId, lmTime,
+    "1",                    // action-mode: 1 = Configure (add/replace key)
+    "com.seclore.fs.ws",    // clid — fixed value, do not vary
+    null,                   // key-id — omit; server assigns its own
+    eaId,                   // app-id — the EA's own id
+    pubKeyX509Der,
+    "256"                   // key-length — fixed value
 );
-// After generating, read the public key and register it in Policy Server:
-// Policy Server → EA → Advanced Security → paste the Base64 public key → Apply
-// Note the Active Key ID Policy Server generates
+// Parse the server-assigned key-id out of responseXml's app-key/client-key-meta/key-id —
+// that is the Active Key ID to use below, not anything you sent in the request.
 ```
+
+See "Configure Advanced Security (type 100)" in `references/code-samples.md` for the full
+`SecloreConfigureAdvSecurity` sample and its field-by-field notes.
 
 #### Step 2: Initialize with CryptoHandler
 
@@ -1141,8 +1258,10 @@ on the same Policy Server.
 
 1. In the Configuration tab, check **Enable Advanced EA**
 2. Click **Generate RSA Key Pair**
-   - The demo calls `DefaultCryptoHandler.generateKeyPair()` internally
-   - A 2048-bit RSA key pair is generated and saved to `config/keypair.properties`
+   - The demo app generates a 2048-bit RSA key pair internally and saves it to
+     `config/keypair.properties`. `DefaultCryptoHandler.generateKeyPair()` is **not** a
+     callable SDK method (confirmed absent from the SDK jar) — this button is the only
+     confirmed path to produce the private key in the SDK's required hex-XML format.
 3. The **Public Key (Base64)** field populates with the X.509-encoded public key
 
 #### Part B: Register the public key in Policy Server
@@ -1181,8 +1300,9 @@ is where Policy Server checks the privilege and will return error `-220133` if n
 ```java
 new DefaultCryptoHandler(
     privateKeyXml,   // String: hex-XML encoded RSA private key
-                     //   from DefaultCryptoHandler.generateKeyPair()
-                     //   or from config/keypair.properties
+                     //   produced by the Seclore demo app's "Generate RSA Key Pair" button
+                     //   (NOT an SDK method — see Pattern 4, Step 1 above), saved to
+                     //   config/keypair.properties
     256,             // int: key length parameter (always 256 for the SDK)
     activeKeyId,     // String: Active Key ID from Policy Server (the numeric ID after registering)
     "ECB",           // String: chaining mode (always "ECB" for Seclore)
@@ -1216,7 +1336,7 @@ These are the access right values to use in Independent Rights XML (`<primary-ac
 
 | Hex value | Decimal | Right |
 |-----------|---------|-------|
-| 0x00000002 | **2** | Read |
+| 0x00000002 | **2** | Read (labeled "View" in the Policy Server UI / Rights Calculator — same right, different name) |
 | 0x00000006 | **6** | Lite Viewer (view-only, no download) |
 | 0x0000000A | **10** | Print |
 | 0x00000022 | **34** | Edit |
@@ -1225,11 +1345,30 @@ These are the access right values to use in Independent Rights XML (`<primary-ac
 | 0x00000202 | **514** | Screen Capture |
 | 0x00000402 | **1026** | Macro |
 
+**The Read/View bit (0x02) is present in every one of these values** — Lite Viewer, Print,
+Edit, Full Control, Copy Data, Screen Capture, and Macro all carry it as their shared base
+bit. When decomposing or explaining any combined value, always list Read/View explicitly as
+one of the granted rights alongside whichever other named rights are present — don't drop it
+just because it's structurally "baked into" the other rights rather than being its own
+separate OR term. For example, decomposing 1578 (Edit + Print + Screen Capture + Macro) should
+be described as granting View + Edit + Print + Screen Capture + Macro, since all four named
+rights already include View and the user genuinely has that capability.
+
 **Combining rights:** Use bitwise OR on the decimal values:
-- Read + Print = 2 OR 10 = **10** (10 is a superset; 0x0A contains Read bit)
+- Read/View + Print = 2 OR 10 = **10** (10 is a superset; 0x0A contains the Read/View bit)
 - Edit + Print = 34 OR 10 = **42** (0x22 OR 0x0A = 0x2A)
-- Full Control = **170** (0xAA — includes Read, Print, Edit, and more)
+- Full Control = **170** (0xAA — includes Read/View, Print, Edit, and more)
 - Full Control + Copy Data = 170 OR 258 = **426** (for users who need clipboard too)
+
+**Full Control's stored value can expand beyond 170.** Sending `primary-access-right=170`
+(Full Control) on a Policy's access-right is persisted by the server as **1966**, not 170 —
+the server normalizes the
+value to include every implied lower-level right (Lite Viewer, Edit, Copy Data, Print,
+Screen Capture, Macro) plus Read/View, matching what the Policy Server Rights Calculator UI
+shows when checking "Full Control" (it auto-checks every other box too, landing on Final:
+1966). Don't assume the value you send for Full Control is the value you'll read back —
+expect 1966 as the fully-expanded equivalent, and treat 170 as Full Control's own
+identifying bit rather than its total stored footprint.
 
 ### Group access rights (for predefined credential groups)
 
@@ -1673,9 +1812,11 @@ String responseXML = tenantObj.sendRequest(null, 74, lookupXml);
 Take the `rep-code` and `id` from the returned `<entity>` and use them in the Type 31 request.
 If the lookup returns no `<entities>` (or `-220372`), the user doesn't exist in Policy Server.
 
-> Querying another user's access permission this way is expected to require the EA/session to
-> have the SUPER USER role on Policy Server. If Type 31 fails with a permission-style error,
-> that's the likely cause — check the EA's role configuration in Policy Server.
+Querying another user's access permission this way (Type 31), and the Type 74 lookup used to
+get their `id`/`rep-code`, both work from a normal EA session — neither requires the SUPER USER
+role. If Type 31 fails with a permission-style error, look elsewhere (e.g. the EA's ownership of
+the Hot Folder/Policy the file is protected under) rather than assuming a role escalation is
+needed.
 
 #### Response structure
 
@@ -1706,11 +1847,13 @@ the file is determined entirely by the contents of `<access-permissions>`.
 
 #### Interpreting `<primary-access-right>` in plain English
 
-Use the same decimal legend as Section 8 (Access Rights Reference):
+Use the same decimal legend as Section 8 (Access Rights Reference). Note the base Read/View
+bit (2) is present in every other value below — call it out explicitly when describing what
+a combined value grants, not just the distinguishing bit for each named right.
 
 | Decimal | Right |
 |---|---|
-| 2 | Read |
+| 2 | Read (aka "View" in the Policy Server UI) |
 | 6 | Lite Viewer |
 | 10 | Print |
 | 34 | Edit |

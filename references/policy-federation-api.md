@@ -193,9 +193,17 @@ PS sends full context about the file, the user, the hot folder, and the client b
         <!-- The protected file -->
         <ara-file-details>
             <fs-id>100058198</fs-id>               <!-- Seclore File ID (mandatory) -->
-            <ext-id>47_SF</ext-id>                 <!-- Your app's File External Reference ID -->
+            <ext-id>47_SF</ext-id>                 <!-- Your app's File External Reference ID.
+                                                          NOTE: "47_SF" is an example value taken from a
+                                                          real captured request — it is NOT a fixed/required
+                                                          value. Your application supplies whatever file
+                                                          identifier it used at protect time; PS just echoes
+                                                          it back unchanged. -->
             <ext-name/>                             <!-- Optional: your app's file name -->
             <ext-data/>                             <!-- Optional: any extra data you passed at protect time -->
+            <ext-app-id/>                           <!-- Optional: identifier of the external application
+                                                          that protected the file. Recommended to be unique
+                                                          per integration so you can tell integrations apart. -->
             <protection-type>1</protection-type>   <!-- 0=Basic Protection, 1=Advanced Protection-->
             <file-status>1</file-status>            <!-- 1=Active -->
             <protection-time>2024:6:7:16:11:20</protection-time>
@@ -204,7 +212,16 @@ PS sends full context about the file, the user, the hot folder, and the client b
         <!-- The Hot Folder used to protect this file -->
         <ara-hot-folder-details>
             <fs-id>10003</fs-id>                   <!-- Seclore Hot Folder ID -->
-            <ext-id>VFI</ext-id>                   <!-- Your HF External Reference ID -->
+            <ext-id>VFI</ext-id>                   <!-- Your HF External Reference ID.
+                                                          NOTE: "VFI" is an example value from a real captured
+                                                          request — NOT a fixed/required value. This is whatever
+                                                          identifier your application assigned when it created
+                                                          this Hot Folder. -->
+            <ext-name/>                             <!-- Optional: HF name your app assigned when creating the HF -->
+            <ext-data/>                             <!-- Optional: any extra data your app attached to the HF
+                                                          at creation time -->
+            <ext-app-id/>                           <!-- Optional: identifier of the external application that
+                                                          created the HF. Recommended to be unique per integration. -->
         </ara-hot-folder-details>
 
         <!-- The user trying to open the file -->
@@ -265,6 +282,26 @@ PS sends full context about the file, the user, the hot folder, and the client b
 - `<ara-user-details><email-id>` — user's email (use this to look up the user)
 - `<ara-client-details><client-number>` — which client is opening the file (see Client Numbers below)
 
+**Hot Folder external-reference fields are also available for decision-making.** Just like
+`<ara-file-details>`, `<ara-hot-folder-details>` carries `<ext-id>`, `<ext-name>`, `<ext-data>`,
+and `<ext-app-id>` — whatever your application set when it created that Hot Folder. All four are
+echoed back in every GetAccessRight request for files protected under that HF, so your ARA logic
+can use them (e.g. `<ext-data>` holding a folder/library ID) the same way it uses the file-level
+`<ext-data>`, without an extra lookup back to Seclore.
+
+**How many Hot Folders do you need?** If your application already has a globally unique file ID,
+one Hot Folder is enough — the ARA decision is driven entirely by `<ara-file-details><ext-id>`, and
+the Hot Folder itself plays no role in who gets access. Use multiple Hot Folders when you want:
+- **Logical segregation** — e.g. one HF per folder/library/site, purely for organizational clarity
+  in the Seclore admin console.
+- **Disambiguating non-unique file IDs** — if your file IDs are only unique *within* a folder or
+  library (not globally), you have two options: (a) create a separate HF per folder/library and set
+  the folder/library ID as that HF's `<ext-app-id>`/`<ext-data>` at creation, so the ARA request tells
+  you which folder the file belongs to; or (b) keep one HF for protection and instead make the
+  *file-level* external reference globally unique yourself, e.g. by concatenating folder ID + file ID
+  (`"FOLDER123_FILE456"`) before protecting, then splitting that string back apart in your ARA logic
+  when the request comes in.
+
 ### Client Numbers
 
 | Number | Client |
@@ -284,6 +321,17 @@ PS sends full context about the file, the user, the hot folder, and the client b
 Note: access right `2` (View) applies to the Desktop Agent only — it does not grant access
 in Seclore Online (client 11). This typically only surfaces as an issue during troubleshooting;
 see the Troubleshooting section.
+
+**Using `<client-number>` to block access on a specific client.** Beyond the View-right quirk
+above, `<client-number>` can be used deliberately as part of your access decision when a customer
+wants to restrict *where* a document can be opened, not just *who* can open it. The motivating
+case is screen capture: the Desktop Agent (client `1`) can block screen capture completely at the
+OS level, whereas Seclore Online (client `11`), running in a browser, has limited control over the
+underlying browser/OS and falls back to a visible watermark instead of a hard block. A
+security-conscious customer who is not satisfied with "watermark only" can have their ARA deny
+access (or return reduced rights) when `<client-number>` is `11`, forcing users to open the
+document natively in the Desktop Agent instead — where the same right can be enforced with an
+actual screen-capture block.
 
 ### Response — User has access (Case 1)
 
@@ -430,6 +478,8 @@ PS calls this to retrieve file metadata from your application.
             <fs-id>200</fs-id>
             <ext-id>Unique Identifier of the HotFolder in your system</ext-id>
             <ext-name>MIS Reports</ext-name>
+            <ext-data>Any free-flowing data your app attached to the HF at creation time</ext-data>
+            <ext-app-id>devserver.example.1</ext-app-id>
         </ara-hot-folder-details>
         <ara-owner-details>
             <ara-user-details>

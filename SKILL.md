@@ -413,6 +413,21 @@ Four scenarios — the EA number in the error message is the clue:
 - Clue: EA number in the error matches your own EA, and the operation is `PROTECT_WITH_HF_EXT_REF`.
 - Fix: in Policy Server admin, open the Hot Folder settings and set its External Reference ID to match your `hfExtRefId` exactly (case-sensitive).
 
+**Scenario E — Update EA Passphrase (type 48) without the manage-other-apps privilege:**
+- The calling EA does not hold the Advanced Privilege to create/update other EAs.
+- Clue: this fires on Update EA Passphrase (48) specifically, before `old-passphrase`/`reset`
+  is evaluated — including for a caller with no Advanced Security configured at all.
+- Fix: configure the calling EA's `app-privileges.manage-other-apps` via Type 100, or call
+  this request as an EA that already holds that privilege.
+- This request (and Get EA Details, type 45, when targeting another EA's id) needs the full
+  elevated session, not just Advanced Security. Two distinct rejections to tell apart:
+  a caller with no `DefaultCryptoHandler`/Advanced Security at all gets `-220133 "User is
+  not authenticated with the Enterprise Application"`; a caller that DOES use
+  `DefaultCryptoHandler` but sends `allow-advanced-privileges=false` gets a different error,
+  `-220656 "Elevated session is needed for this operation"` / "Sorry, you are not allowed to
+  perform this operation." Only Advanced Security + `allow-advanced-privileges=true` (plus
+  the manage-other-apps privilege itself) succeeds.
+
 #### "Not protected with any HotFolder managed by you" (-220,473)
 **Fix:** Standard unprotect only works for files where the initialized EA owns one of the
 Hot Folders associated with the file. Use Unprotect Any File (requires Advanced Security +
@@ -433,14 +448,25 @@ doesn't own the file's Hot Folder.
 **Fix:** Wrap the file ID: `<file-details><file-id>SECLORE_FILE_ID</file-id></file-details>`
 
 #### "Failed to parse RSA Key XML" / "Failed to fetch Session Key"
-**Fix:** The RSA private key XML has been corrupted or manually edited. Regenerate the key
-pair, re-register the new public key in Policy Server, get the new Active Key ID, and
-reinitialize with the new values.
+**Cause:** The private key XML your code holds no longer matches the public key currently
+registered against the Active Key ID on Policy Server for this EA — usually because the key
+was rotated on one side but not the other.
+**Fix:** Register a public key that matches the private key your `DefaultCryptoHandler` uses
+(or generate a fresh pair and update both sides together): derive the public key from your
+private key's RSA modulus/exponent, register it against the EA in Policy Server (admin
+console, or Type 100 Configure Advanced Security), read back the new Active Key ID, and
+reinitialize `DefaultCryptoHandler` with the matching values.
+**If you are using the Seclore demo app specifically** (not a custom SDK integration), its key
+management is separate from this: it stores the key pair in `config/keypair.properties` and
+regenerates it via the "Generate RSA Key Pair" button in its Configuration tab — see the demo
+portal's own guidance for that workflow; the `config/keypair.properties` file has no meaning
+in a custom SDK integration.
 
 #### User lookup returns -220,372
 This is not an error — it means the user was not found in Policy Server by `sendRequest`
-type 74. The standard pattern is to auto-create the user via `sendRequest` type 109 and
-then use the returned entity ID.
+type 74. The standard pattern is to auto-create the user via `sendRequest` type 109
+(requires `email-id`, `requestor-comments`, and `referrer-email-id`, the last
+of which must be an already-existing Policy Server user) and then use the returned entity ID.
 
 #### Log file location
 SDK writes to `logs/WSClient.log` (relative to the `app-path` set in App Config XML).
@@ -574,9 +600,9 @@ tenantObj.unprotectX(
 | Type | Purpose | Success | Not found / failure |
 |------|---------|---------|-----------|
 | `29` | Get a protected file's full protection details (owner, classification, credential/access-right mappings) | raw response XML | — |
-| `31` | Get one user's access permission on a file — requires entity `rep-code`+`id` (not email); resolve via type 74 first if you only have an email | raw response XML with `<access-permissions>` | EA may need SUPER USER role |
-| `74` | Look up user by email | `String[] {id, repCode, type}` | `-220372` |
-| `109` | Create IM user | `String[] {id, repCode, "1"}` | N/A |
+| `31` | Get one user's access permission on a file — requires entity `rep-code`+`id` (not email); resolve via type 74 first if you only have an email. Works from a normal EA session — no SUPER USER role needed. | raw response XML with `<access-permissions>` | — |
+| `74` | Look up user by email or login ID. Works from a normal EA session — no SUPER USER role needed. | raw response XML with `<entities><entity>` (NOT a `String[]`) | `-220372` |
+| `109` | Create IM user. `email-id`, `requestor-comments`, `referrer-email-id` all mandatory — `referrer-email-id` must be an already-existing PS user's email. | raw response XML with `<im-user>` (NOT a `String[]`) | `-210001` (missing referrer-email-id), `-220517` (invalid referrer-email-id) |
 
 First parameter is always `null`. Third parameter is an XML string — see `references/code-samples.md` for the XML. Type 29 and 31 are covered in full, with worked examples, in Section 12 of `references/sdk-guide.md`.
 
@@ -686,6 +712,20 @@ Available samples:
 - Native Protect / protectX (`SecloreNativeProtectSample`)
 - Wrap and Unwrap (`SecloreWrapUnwrapSample`)
 - Native Unprotect / unprotectX (`SecloreNativeUnprotectSample`)
+- Admin Operations — Create/Update EA, Configure Advanced Security, Update EA Passphrase,
+  Hot Folder, Policy, plus Policy-mapping/lookup ops (`SecloreCreateEA`, `SecloreUpdateEA`,
+  `SecloreConfigureAdvSecurity`, `SecloreUpdateEAPassphrase`, `SecloreCreateHotFolder`,
+  `SecloreUpdateHotFolder`, `SecloreCreatePolicy`, `SecloreUpdatePolicy`,
+  `SecloreListPoliciesByUser`, `SecloreGetPolicyDetails`, `SecloreMapEntityToPolicy`) —
+  covers `sendRequest` types 44/47/100/48/49/50/22/24/20/21/25 (11 total). Use when someone
+  asks for sample code to create or update an EA, enable/disable/configure Advanced Security
+  on an EA, rotate an EA's passphrase, create or update a Hot Folder or Policy (credential),
+  look up Policies, or map entities to a Policy via the Server SDK, as opposed to
+  protect/unprotect operations above.
+- Search User / Create IM User (`lookupUser()` and `resolveOrCreateUser()` helpers in
+  `code-samples.md`'s Independent Rights sample) — cover `sendRequest` types 74 and 109. Use when
+  someone needs to resolve an email or login ID to a Policy Server entity ID before building a
+  protection/access XML, auto-creating the user if the lookup finds nothing.
 
 **Mandatory pre-check rule — applies to every sample:**
 - Before `protectAndWrap` / `protectX` → `isProtectedFile` + `isSupportedFile`
@@ -693,6 +733,245 @@ Available samples:
 - Before `unprotectX` → `isProtectedFile`
 - `FSHelperLibrary.terminate()` before every `return` and at end of `main`
 - Windows path escaping: use `\\` or `/` — never single `\` in Java strings
+
+**Admin operations (Mode 6 + Mode 4 overlap):** for Create/Update EA, Hot Folder, or Policy
+sample code, the `RequestType` constants are `RT_ADD_ENTERPRISE_APPLICATION` (44),
+`RT_UPDATE_ENTERPRISE_APPLICATION` (47), `RT_CREATE_HOT_FOLDER` (49), `RT_UPDATE_HOT_FOLDER` (50),
+`RT_ADD_CRED` (22), `RT_UPDATE_CRED` (24), `RT_GET_CREDS` (20), `RT_GET_CRED_DETAILS` (21) —
+verified directly from the SDK's `RequestType` class, not inferred from naming. **Type 25 (Map/
+Unmap Entities to Policy) has no named constant in this jar — pass the literal integer 25.**
+Hot Folder creation in particular sends `<state>1</state>` and `<adv-html-wrap-supported>`,
+plus an optional `file-credential-mappings` block to attach a Policy at creation — see the
+notes under each sample in `code-samples.md` before varying from that shape.
+
+**Real-world workflow order, confirmed by a previous customer deployment:** Create Policy (22) → Map Entities to Policy (25) → Create/Update Hot Folder
+using that Policy (49/50) → Update Policy (24, via fetch-then-edit using type 21). Two
+real failures to flag if someone hits them:
+- Attaching a Policy to a Hot Folder without first mapping the owner entity to it via type 25
+  fails with "Unable to create the Hot Folder '...' as some Policies are not mapped to the
+  Owner."
+- Setting an individual User as a Policy's owner (rather than a Container/OU) fails with
+  "Super User can not define a Custom Policy" — regardless of which user is named or the
+  calling session's privilege level. Custom (User-owned) Policy creation is only possible from
+  a genuine Super User session in the Policy Server UI, not via the SDK. Always use a
+  Container/OU as the owner for SDK-driven Policy creation — see the Create Policy callout
+  below.
+
+**Create Policy (type 22):** works from a plain session — no Advanced Security required.
+Every field is mandatory except `id`, `locked`, `created-by`, `creation-time`, `lm-by`,
+`lm-time`, including `<offline>` inside each `<access-right>` (omitting it fails with
+`-240003 Missing parameter 'offline'.`, even though the source protocol documentation doesn't
+flag it as required) — send `<redistribute>` and `<lock-to-first-machine>` alongside it too.
+Owner must be a Container/OU (`owner.type=2`), never an individual user — see above.
+
+**Update Policy (type 24):** works from a plain session — no Advanced Security required.
+Follows a **fetch-then-edit** pattern: call type 21 first, then edit only `access-rights`
+from that response before resending — existing rights keep their `id`/`creation-time`/
+`lm-time` (this edits them in place); new rights must omit those three tags entirely (the
+server assigns them). Omitting an existing access-right from the resubmitted record removes
+that entity's access outright. `owner`, `status`, and `default-applicable` are optional on
+this request — they can be left out and the existing values are preserved, so a minimal
+request only needs `id`, `name`, `lm-time`, and `details`. `<status>` specifically cannot be
+changed here regardless of what you send — the request still succeeds, but the status value
+is silently ignored. Changing a Policy's status is not possible via the SDK at all — it
+fails with `-220085 Insufficient privileges to perform the operation` across every session
+configuration (plain, Advanced-Security-only, and Advanced Security + Advanced Privileges
+enabled). Use the Policy Server admin UI to activate/deactivate a Policy. Also note:
+`primary-access-right` values aren't necessarily echoed back verbatim — granting a
+higher-level right (e.g. Full Control) causes the server to normalize/expand the stored
+value to include every right it implies, so don't assume the value you send is the value
+you'll read back. See `21-get-policy-details.xml` and `24-update-policy.xml` for the full
+rationale.
+
+**List Policies by User (type 20):** `<id>` must be a real, LDAP-resolvable SID/QID — get
+one from Search User (type 74) first. Sending anything that doesn't resolve to an LDAP
+entity (an email address, or an arbitrary internal numeric id) does not produce a clean
+validation error; the server crashes with an unhandled NPE, `-240011`, citing
+`FIMLDAPUser.getIsMemberOf()` on a null object. Treat any `-240011` from this request as
+"the `<id>` you sent didn't resolve" rather than relying on the error text. For a Group
+entity (`type=2`), the same requirement applies — supply a real, LDAP-resolvable Group SID
+rather than a container/OU id. This skill has no dedicated "search group" request; obtain a
+Group SID from your directory service or the Policy Server admin console directly.
+
+**Map/Unmap Entities to Policy (type 25):** works from a plain session — no Advanced
+Security required. Mapping (`action=1`) and unmapping (`action=0`) a real User entity both
+work and are visible/reversible in the Policy Server UI's "Policy Entity Mapping" screen.
+`<entity><id>` must be a real, LDAP-resolvable entity SID — a Policy's owner
+container/OU id (from Create Policy, type 22) is not itself a mappable `type=2` (Group)
+entity; sending it that way fails with `-300016 Could not get entity '...' from
+repository`. As with Type 20, use a real, LDAP-resolvable Group SID for the `type=2` path
+rather than a container/OU id.
+
+**Create Hot Folder (type 49):** works from a plain session, as long as the Hot Folder is
+created for the SAME EA you authenticated as — creating one for a different EA fails with
+`-220133`, even with a full elevated session holding the manage-other-apps privilege (a
+structural restriction, not a missing privilege). Genuinely mandatory: `name`, `location`,
+`owner`, `inherits`, `recursive`, `type`, and `process-all-supported` (the last one fails
+differently — an omitted/falsy value requires `<exts>`, so omitting both gives `-220526`
+instead of the usual `-240003`). Optional with a server-assigned default when omitted:
+`description` (empty), `adv-html-wrap-supported`/`process-wo-ext`/`process-all-ext` (0),
+`state` (always normalizes to 1/Monitoring on create), `parent-id` (0, top-level), and
+`classification` (assigns the tenant's `default-selected=1` classification — don't hardcode
+classification id `1` as a safe default; it's tenant-specific and was "Top Secret," not
+"Unclassified," in one tested environment). `protector` defaults to `owner` when omitted.
+An `extn-reference` block (External Reference: id/name/data/app-id) can be sent at creation
+time, not just on update.
+
+**Update Hot Folder (type 50):** no Advanced Security required. Genuinely mandatory:
+`lm-time`, `name`, `inherits`, `recursive`, `process-all-supported` (fails differently —
+omitting it requires `exts`, giving `-220525` instead of the usual `-240003`), and the
+`protection-details` block itself (`-200016` if omitted). Unlike Create, `classification`
+inside `protection-details` is also mandatory here (`-210001` if omitted) — don't assume
+Create and Update share the same optional/mandatory rules for that field. `owner` is
+optional in general (omitting it preserves the existing owner), but becomes required in
+practice when adding a Policy via `file-credential-mappings` — omitting `owner` in that
+combination causes an unhandled server-side NPE (`-240011`) instead of a clean validation
+error; always include `owner` alongside a Policy-add. `parent-id`, `location`, `type`, and
+`state` cannot be changed via this request — use type 51 for state.
+
+**Create EA (type 44):** every
+`file-server` field is mandatory except `description` — `name`, `type`, `machine-id`,
+`machine-host-name`, `passphrase`, plus `<ps-id>` outside `file-server`, are all required.
+Two gotchas worth flagging to anyone using this sample:
+- **`<ps-id>` format.** The value is not the Policy Server's hex id by itself — it's the full
+  label shown in the Policy Server admin console, `"<Display Name> (<hex-id>)"`. Sending the
+  hex id alone, or an empty value, both fail with `-200023 Invalid Policy Server identifier
+  '<value>'.`
+- **`machine-id` / `machine-host-name` are mandatory but invisible.** Neither field is shown
+  anywhere in the Policy Server admin UI for an EA, so there's nothing to validate them
+  against — any non-empty placeholder value is accepted. Leaving either blank fails with
+  `-240003 Missing parameter '<field>'.`
+- **EA names are not unique.** Two create calls with the identical `<name>` both succeeded; the
+  server assigned different auto-generated `<id>` values and raised no error. Don't treat name
+  as a uniqueness key.
+- **Response includes `machine-id`** on success, despite the request-structure doc listing it
+  as excluded from the response — a real doc-vs-live discrepancy, noted rather than silently
+  corrected. `passphrase` is still not echoed back, consistent with the doc.
+- **`<type>` must always be 3 (Custom EA) for SDK-created EAs.** The doc lists 1 (Server EA)
+  and 2 (Desktop EA) as valid too, and both were rejected live with `-210002 Invalid value ''
+  specified for parameter 'type'.` — note the message always shows an empty quoted value
+  regardless of what was actually sent, so don't trust it to confirm what you sent. This is
+  not a license/tenant restriction: the Server SDK always creates a **virtual** EA, and only
+  `type=3` is a virtual EA. Types 1/2 are **physical** EAs (typically a NAS location) and are
+  not creatable through this SDK call at all. Generalize this — always send `<type>3</type>`
+  on Create EA via the SDK.
+- **Empty `<type>`** fails with `-240003 Missing parameter 'type'.` (missing vs. invalid-value
+  are distinct errors for this field — empty gives `-240003`, a present-but-rejected value like
+  `1` or `2` gives `-210002`).
+- **`machine-host-name` is also mandatory**: leaving it empty (with
+  `machine-id` present) fails with `-240003 Missing parameter 'machine-host-name'.`, isolating
+  it from the `machine-id` check.
+
+**Update EA (type 47):** `id`, `name`, and `lm-time` are mandatory (`-240003` if `name`/
+`lm-time` is empty, `-200023` if `ps-id` is wrong/empty — same format as Create EA above).
+`description` is NOT mandatory but is full-overwrite, not merge: omitting it blanks the
+existing value rather than preserving it, so always fetch the current record via Type 45
+first and resend every field you don't want cleared. `lm-time` is a genuine optimistic-lock
+check, not just a presence check — a stale value fails with `-220641` ("already updated by
+some other user"); each successful update returns a new `lm-time` to chain into the next
+call, and the admin console UI never displays it.
+- **Policy Federation (`ar-adaptor-details`) is updatable via this request**, contrary to
+  documentation that describes `type` as not-updatable. You must include the EA's own
+  `<type>` (1=Server, 2=Desktop, 3=Custom — fetch via Type 45 if unknown) in the SAME
+  request as `ar-adaptor-details`, or the update fails with `-220435 "Access Right Adaptor
+  cannot be configured for Enterprise Application type : -1."` because the server can't
+  resolve ARA-eligibility without it. With `type` included, this works both for enabling ARA
+  on an EA that didn't have it and for changing the `ARAdaptorBaseURL` on one that already
+  did.
+- The `ar-adaptor-specific-details` params use these literal keys (not documented in the
+  protocol spec, which only describes the generic `param/name/value` wrapper):
+  `ARAdaptorBaseURL`, `ARAdaptorAuthScheme`, `ARAdaptorUsername`, `ARAdaptorPassword`.
+  `ARAdaptorAuthScheme=0` (no auth) needs only the first two. `ARAdaptorAuthScheme=1`
+  (Basic Auth) additionally requires `ARAdaptorUsername`/`ARAdaptorPassword` — omitting the
+  username fails with `-2500034 "Basic Authentication user name is missing."` Always use ARA
+  `<type>2</type>` (Full Federation) — `1` (Partial) isn't used in Seclore deployments.
+- The ARA's `<name>` is never echoed back — the response derives it from `<type>` instead
+  (e.g. type=2 → `Full Federation`).
+- `app-key`/`app-privileges` are silently ignored on update when Advanced Security is
+  already configured (no error, just absent from the response) — Type 100 is the dedicated
+  request for changing Advanced Security config.
+- **Update EA requires an elevated (Advanced Security) session.** A plain/basic session (no
+  `DefaultCryptoHandler`, `allow-advanced-privileges=false`) gets the Type 47 request itself
+  rejected with `-220656 "Elevated session is needed for this operation."`, regardless of
+  which EA is calling or which EA is the target. Use the Advanced Security
+  `DefaultCryptoHandler` login path for any integration that needs to update EAs.
+- **Policy Federation cannot be disabled once enabled.** Sending `ar-adaptor-details` with
+  `<type>0</type>` to an EA that already has Full Federation (`2`) configured fails: with
+  ARA params still attached, the server returns `-220429 "No configuration found for Access
+  Right Adaptor type : 0"`; with an empty `<params></params>` block, it returns
+  `-210001 "Missing parameter 'type'."` Neither succeeds, and the Policy Server admin
+  console's "Access Right Adaptor type" dropdown is greyed out and locked once Policy
+  Federation is on. Treat Policy Federation as a one-way switch when designing EA
+  provisioning — there is no supported way to turn it back off.
+
+**Update EA Passphrase (type 48):** unlike Update EA (47), this is NOT a full-overwrite
+request — only `id`, `passphrase` (the new value), and `lm-time` inside `file-server` are
+read; everything else in the shared structure is ignored even if sent. `lm-time` and
+`passphrase` are mandatory (`-240003` if either is empty), with the same optimistic-lock
+semantics as type 47.
+- **The real gate on this request is caller privilege, not `old-passphrase` or `reset`.**
+  Only an EA holding the Advanced Privilege to create/update other EAs
+  (`app-privileges.manage-other-apps`, configured via Type 100) can update another EA's
+  passphrase at all. An EA without that privilege — including a basic login with no
+  Advanced Security configured — is rejected outright with `-220133 "User is not
+  authenticated with the Enterprise Application 'X'"`, before `old-passphrase` or `reset`
+  is ever evaluated. This is a different rejection than Update EA's `-220656`: `-220656`
+  means "you need an elevated session at all"; `-220133` here means "your EA specifically
+  lacks rights over the target EA."
+- `<old-passphrase>` is not enforced for any EA holding that privilege: omitting it
+  succeeds under both `<reset>0</reset>` and `<reset>1</reset>`, despite the documented
+  framing of `reset` as an old-passphrase-required/not-required switch. Caller privilege
+  is the only access control on this request — `old-passphrase` has no independent
+  enforcement.
+- Sending the new `<passphrase>` identical to the current passphrase succeeds cleanly —
+  there is no "new passphrase cannot equal old passphrase" enforcement in practice.
+- The new passphrase is never echoed back in the response, same as Update EA.
+
+**Configure Advanced Security (type 100):** enables, replaces, or disables the RSA public
+key registered for an EA in Policy Server. This is the SDK-native alternative to the
+manual "Policy Server admin console → EA → Advanced Security → paste public key → Apply"
+step. `id`, `lm-time`, `ps-id` (full admin-console label format), and `action-mode` are
+all mandatory (missing any one produces `-240003` for `id`/`lm-time`, `-200023` for `ps-id`,
+or `-210001` for `action-mode`). `app-key` is additionally mandatory for `action-mode=1`
+(Configure) — omitting the block gives `-210001 "Missing parameter 'app-key'."` — and must
+be omitted for `action-mode=2` (Disable).
+- **`clid` must be the literal fixed string `"com.seclore.fs.ws"`.** It is a protocol
+  constant, not a caller-chosen identifier. Sending any other value triggers `-220655
+  "Client not supported for this operation."` Omitting it entirely causes a server-side
+  null-pointer crash (`-240011`) instead of a clean validation error — always include it.
+- **`key-id` is server-assigned.** Whatever value the caller sends is ignored; Policy Server
+  generates its own UUID. Omitting `key-id` is safe. Read the server-assigned value back
+  from the response's `app-key/client-key-meta/key-id` and use THAT as the `activeKeyId`
+  in `DefaultCryptoHandler`'s constructor.
+- **`key-length` is always `"256"` for this request** — the SDK's internal parameter value,
+  matching `DefaultCryptoHandler`'s constructor, regardless of the RSA modulus bit size.
+- **Policy Server does not verify key possession at Configure time.** Any syntactically
+  valid Base64 X.509 public key is accepted without proof that the caller holds the private
+  key. A mismatch won't surface until the first crypto challenge fails.
+- **`action-mode=2` (Disable) is not idempotent.** Calling Disable on an EA already
+  without Advanced Security enabled fails with `-220616 "FileServer '<id>' is not advanced
+  security enabled."` — check current state via Type 45 before calling.
+- **Response includes an undocumented `<signing-algo>SHA256withRSA</signing-algo>` field**
+  inside the pub-key block when `action-mode=1`. The public key data itself is not echoed back.
+- There is no named `RequestType` constant confirmed in this SDK jar for type 100 — pass the
+  literal integer `100`.
+
+**Search User (type 74):** send `<email-id>` (or
+`<login-id>` — exactly one, not both) flat inside `<request-details>`, not a `<search-user>`
+wrapper. `sendRequest()` always returns the response XML as a String, never a `String[]` — parse
+`<entities><entity>` out of it, same as every other request type. Both fields are confirmed to
+work identically when sent alone. Sending both fails cleanly with `-220371`; sending neither
+fails cleanly with `-220370` — both are well-behaved validation errors, not silent failures.
+
+**Create IM User (type 109), used as the fallback when the type-74 lookup finds
+nothing:** wrap fields in `<im-user>` inside `<request-details>` — `<email-id>`,
+`<requestor-comments>`, and `<referrer-email-id>` are all mandatory. `referrer-email-id` must be
+the email of an **already-existing** Policy Server user (any existing user works, not just an
+EA/admin) — omitting it fails with `-210001`, an empty/invalid value fails with `-220517`.
+`<repository><rep-code>` is optional; if omitted, Policy Server auto-assigns the new user to its
+Internal or External Users repository based on the email's domain. `sendRequest()` returns the
+response XML as a String (never a `String[]`) — parse the new user's `id`/`rep-code` out of the
+top-level `<im-user>` block in the response.
 
 ---
 
@@ -1056,10 +1335,44 @@ Seclore repository/adaptor concepts: **load `references/identity-federation-guid
 | Can the SDK talk to more than one EA or Policy Server at once? | Yes — register each as a separate tenant via `initializeHelper(TENANT_ID, ...)`; see Mode 1's "Multi-tenant" section. |
 | Does Advanced Security = Advanced Privileges? | No. Advanced Security is the RSA key pair auth mechanism. Advanced Privileges (Unprotect Any File, etc.) require Advanced Security + privilege flags enabled in PS + `allow-advanced-privileges=true` in config. |
 | Can I use Advanced Security without advanced privileges? | Yes. Initialize with `DefaultCryptoHandler` and set `<allow-advanced-privileges>false</allow-advanced-privileges>` in the tenant config. |
+| Can I skip `DefaultCryptoHandler` entirely if Advanced Security is enabled for my EA? | No. Once an EA has Advanced Security enabled in Policy Server, every login from that EA must use `DefaultCryptoHandler` — a plain/basic session (no crypto handler at all) is rejected with "Sorry, authentication failed due to missing authentication token," regardless of `allow-advanced-privileges`. Only EAs without Advanced Security enabled can use a plain session. See Mode 3. |
 | What does `-220372` mean? | User not found in Policy Server (from `sendRequest` type 74). Auto-create with type 109. |
 | What does `-220133` mean? | EA not authenticated or lacks rights for this operation. See Mode 3 for four scenarios. |
-| What does `-240003` mean? | Owner not found (Independent Rights) OR Hot Folder `<id>` element is empty. Check `logs/WSClient.log` for "Missing parameter 'id'" to distinguish. |
-| What does `-210001` mean? | Missing required parameter in protection XML — for `PROTECT_WITH_FILE_ID` this means the XML is missing the `<file-details>` wrapper. |
+| What does `-240003` mean? | Owner not found (Independent Rights) OR Hot Folder `<id>` element is empty OR a mandatory Admin Ops field (e.g. `machine-id` on Create EA) was sent empty. Check the error-message text to tell them apart. |
+| What does `-200023` mean? | Invalid Policy Server identifier — `<ps-id>` was empty or sent as the hex id alone. Fix (Create EA): send the full Policy Server admin-console label, `"<Display Name> (<hex-id>)"`. |
+| Which Create EA (type 44) fields are mandatory? | Everything except `description`: `ps-id`, `name`, `type`, `machine-id`, `machine-host-name`, `passphrase`. |
+| What's the correct XML for Search User (type 74)? | Flat `<email-id>` (or `<login-id>`, not both) inside `<request-details>` — NOT `<search-user><email>`. `sendRequest()` returns the response XML as a String, NOT a `String[]`. Both `email-id`-alone and `login-id`-alone are confirmed to work. |
+| What does `-220370` mean? | Search User (type 74): neither `email-id` nor `login-id` was provided. Exactly one is required. |
+| What does `-220371` mean? | Search User (type 74): both `email-id` and `login-id` were provided in the same request. Send exactly one. |
+| What's the correct XML for Create IM User (type 109)? | `<im-user><email-id>/<requestor-comments>/<referrer-email-id></im-user>` inside `<request-details>` — NOT `<create-user><email>/<first-name>/<last-name>`. All three `<im-user>` fields are mandatory; `referrer-email-id` must be an already-existing PS user's email. `sendRequest()` returns the response XML as a String, NOT a `String[]`. |
+| Are EA names unique? | No. Duplicate `<name>` values on Create EA both succeed; the server assigns different `<id>` values. Use `<id>`, not `<name>`, as the uniqueness key. |
+| What does `-210002` mean? | Invalid value `''` specified for parameter `<field>` — the field was non-empty but the value itself was rejected. On Create EA: `type=1`/`2` both rejected, only `type=3` accepted on the tested Policy Server. The quoted `''` never reflects what was actually sent — check your own request, not the error text. |
+| Which `type` value works for Create EA (44)? | Always `3` (Custom EA). `1` (Server EA) and `2` (Desktop EA) are rejected with `-210002` — not a license restriction, but because the SDK only creates virtual EAs, and only `type=3` is virtual; types 1/2 are physical EAs (e.g. a NAS location) and aren't creatable via this SDK call at all. Empty `<type>` gives `-240003` instead. |
+| Can Policy Federation (ARA) be changed after EA creation? | Yes, via Update EA (type 47) — contrary to docs implying `type` is not updatable. Send the EA's own `<type>` in the SAME request as `ar-adaptor-details`, or it fails with `-220435`. See Mode 6's Update EA callout. |
+| What does `-220435` mean? | "Access Right Adaptor cannot be configured for Enterprise Application type : -1." — you sent `ar-adaptor-details` on Update EA (47) without also sending the EA's own `<type>`. Fix: include `<type>` (fetch via Type 45 if unknown) in the same request. |
+| What does `-220439` mean? | "Mandatory Parameter '<x>' is missing." — a required `ar-adaptor-specific-details` param is missing/misnamed. The real param names (not in the docs) are `ARAdaptorBaseURL` and `ARAdaptorAuthScheme`. |
+| What does `-220641` mean? | Stale `lm-time` on Update EA (47) — "already updated by some other user." This is a genuine optimistic-lock check, not just presence validation; refetch via Type 45 and retry with the new `lm-time`. |
+| Does Update EA (47) preserve fields you don't send? | No — it's full-overwrite, not merge. Omitting `description`, for example, blanks it rather than keeping the old value. Always fetch current state via Type 45 first and resend everything you want to keep. |
+| What does `-220656` mean? | "Elevated session is needed for this operation." Update EA (47) requires an Advanced Security (elevated) session — a basic/plain login gets the request rejected outright, regardless of which EA is calling or which EA is the target. |
+| What does `-2500034` mean? | "Basic Authentication user name is missing." `ar-adaptor-details` was sent with `ARAdaptorAuthScheme=1` but no `ARAdaptorUsername` param. Unlike `-220439`, this error never names the literal field. |
+| What are the param names for Basic Auth on Policy Federation (ARA)? | `ARAdaptorUsername` and `ARAdaptorPassword`, alongside `ARAdaptorBaseURL`/`ARAdaptorAuthScheme=1`. |
+| What does `clid` mean in Configure Advanced Security (type 100)? | The literal fixed string `"com.seclore.fs.ws"` — a protocol constant, not a caller-chosen value. Any other value fails with `-220655`. Omitting it causes a server-side NPE (`-240011`). |
+| What is `key-id` in type 100 and who sets it? | Policy Server generates it — whatever the caller sends is ignored. Omit it (safe) or send any UUID; read the server-assigned value back from the response `app-key/client-key-meta/key-id`. That UUID is the `activeKeyId` for `DefaultCryptoHandler`. |
+| What `key-length` should I send on type 100? | Always `"256"` — the SDK's internal key-length parameter value, same as `DefaultCryptoHandler`'s constructor, regardless of actual RSA modulus size. |
+| Who can call Update EA Passphrase (type 48)? | Only an EA holding the Advanced Privilege to create/update other EAs (`app-privileges.manage-other-apps`, set via Type 100). A caller without it — including a basic login with no Advanced Security at all — is rejected with `-220133` before `old-passphrase`/`reset` is even evaluated. |
+| Is `old-passphrase` actually enforced on type 48? | No — not for any EA holding the manage-other-apps privilege. Omitting it succeeds under both `reset=0` and `reset=1`, despite the docs describing `reset` as the switch that controls whether it's required. Caller privilege is the only access control on this request; `old-passphrase` has no independent enforcement. |
+| Can the new passphrase equal the old one on type 48? | Yes — sending an identical value for `passphrase` and `old-passphrase` succeeds, contrary to documentation stating it cannot. |
+| Which type 48 fields are mandatory? | `id`, `passphrase`, `lm-time` inside `file-server`. Unlike Update EA (47), this is NOT full-overwrite — only those three fields are read; everything else in the shared structure is ignored even if sent. |
+| Can Policy Federation (ARA) be disabled once enabled? | No. Sending `ar-adaptor-details` with `<type>0</type>` is rejected (`-220429` with leftover auth params still attached, `-210001` with an empty `<params/>` block — neither shape works). The admin console's "Access Right Adaptor type" dropdown is also greyed out and locked once Policy Federation is on. Treat it as a one-way switch. |
+| What does `-220429` mean? | "No configuration found for Access Right Adaptor type : 0." Occurs when setting `ar-adaptor-details` `<type>0</type>` on an EA that already has Full Federation configured, with other ARA params still attached. Confirms ARA can't be disabled this way. |
+| What does `-210001` mean? | Two distinct contexts: (1) a generic, parser-level "Missing parameter 'type'." when sending `ar-adaptor-details` `<type>0</type>` with a fully empty `<params></params>` block — a different failure mode from `-220429`, but still a failure; (2) on `PROTECT_WITH_FILE_ID`, a missing `<file-details>` wrapper in the protection XML. |
+| What format does `<id>` need on List Policies by User (type 20)? | A real, LDAP-resolvable SID/QID (get one via Search User, type 74) — not an email address. An unresolvable value doesn't fail cleanly; it crashes the server with `-240011`. |
+| What does `-240011` mean? | An unhandled server-side NPE — two distinct root causes: (1) on List Policies by User (type 20): `FIMLDAPUser.getIsMemberOf()` on null when `<id>` doesn't resolve to a real LDAP entity — treat it as "the id didn't resolve"; (2) on Configure Advanced Security (type 100): `ClientKeyMeta.getCLId()` on null when `<clid>` is entirely absent from the `app-key/client-key-meta` block — fix by always including `<clid>com.seclore.fs.ws</clid>`. Same error code, different stack frame and root cause in each case. |
+| What does `-220616` mean? | "FileServer '\<id\>' is not advanced security enabled." — returned by Configure Advanced Security (type 100) `action-mode=2` (Disable) when the target EA's Advanced Security is already disabled. Disable is not idempotent. Check current state via Type 45 before calling; don't call Disable unless you have confirmed AS is currently enabled. |
+| Does Create Policy (type 22) need Advanced Security? | No — it works from a plain session. |
+| Which Create Policy (type 22) fields are mandatory? | Everything except `id`, `locked`, `created-by`, `creation-time`, `lm-by`, `lm-time` — including `<offline>` inside each `<access-right>`, which isn't flagged as required in the source protocol doc but is enforced live (`-240003` if omitted). |
+| Can I create a Custom (User-owned) Policy via the SDK (type 22)? | No. Setting `owner.type=1` to any individual user is rejected with `-220402`, regardless of the calling session's privilege level. Custom Policy creation is restricted to a genuine Super User session in the Policy Server UI. Use `owner.type=2` (Container/OU) for SDK-driven Policy creation instead — this produces a "Predefined"-type Policy and works from any authorized EA session. |
+| What does `-220402` mean? | "Super User can not define custom credential" (Create Policy, type 22) — the request set `owner.type=1` to an individual user. Not about which specific user was named; Custom Policy creation isn't achievable via the SDK at all. Use a Container/OU owner instead. |
 | What does `-220473` mean? | EA does not own this file's Hot Folder — use Unprotect Any File mode. |
 | Which unprotect method for native files? | `unprotectX()` — `void` return, pre-check with `isProtectedFile()`. |
 | Which unprotect method for HTML-wrapped files? | `unwrapAndUnprotect()` — returns `UnprotectedFile`, pre-check with `isHTMLWrapped()`. |
