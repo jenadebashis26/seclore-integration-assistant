@@ -137,7 +137,7 @@ seclore-integration-assistant/
 | v1.2 | Added DRM API Server integration guide — REST endpoints, file lifecycle, auth, storage options, best practices, sample code |
 | v1.3 | Added Seclore Online Integration — EA endpoint implementation, proof key validation, access token lifecycle, CFAD, security model, iFrame deprecation |
 | v1.4 | Added Seclore Endpoint SDK — SecloreActionDispatcher.exe, protect/classify/share actions, BulkClassifier.exe, Mac support, file protection detection |
-| v1.5 | Live-tested Policy lifecycle (Create, Update, Map/Unmap Entities), EA Passphrase Update, and Hot Folder Create/Update admin operations; corrected Access Rights terminology (Read vs. View) and Full Control normalization behavior |
+| v1.5 | Added sendRequest() methods details to Manage Policy, EA and Hot Folder.|
 
 ---
 
