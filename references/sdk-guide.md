@@ -1330,7 +1330,7 @@ new DefaultCryptoHandler(
 
 ## 8. Access Rights Reference
 
-These are the access right values to use in Independent Rights XML (`<primary-access-right>`).
+These are the access right values used wherever `<primary-access-right>` appears — Independent Rights XML, Policy access-right mappings, and Policy Federation ARA responses (`<access-permissions>`) all share the same bitmask legend.
 
 ### Primary access rights (for individual entities)
 
