@@ -2777,11 +2777,10 @@ public class SecloreUpdatePolicy {
 - `<status>` cannot be changed via this request, even when sent back as part of the full
   record. Sending a different `<status>` value still returns success (`return-value=1`), but
   the field is silently ignored — a follow-up type-21 fetch shows the original value
-  unchanged. Changing a Policy's status is not possible via the SDK at all — type 23
-  (`RT_UPDATE_CRED_STATUS`) was tried across a plain session, an Advanced-Security session
-  with no Advanced Privileges, and an Advanced-Security session with Advanced Privileges
-  enabled, and every attempt failed identically with `-220085 Insufficient privileges to
-  perform the operation`. Use the Policy Server admin UI to activate/deactivate a Policy.
+  unchanged. Changing a Policy's status is not possible via the SDK under any session type
+  (plain, Advanced Security, or Advanced Security with Privileges) — type 23
+  (`RT_UPDATE_CRED_STATUS`) always returns `-220085 Insufficient privileges to perform the
+  operation`. Activate/deactivate a Policy from the Policy Server admin UI instead.
 - `owner`, `status`, and `default-applicable` are optional on this request — they can be
   omitted from the resubmitted record entirely, and the existing values are preserved rather
   than reset or rejected. A minimal update only needs `id`, `name`, `lm-time`, and `details`.
@@ -2789,7 +2788,7 @@ public class SecloreUpdatePolicy {
   guarantees you don't accidentally omit something that turns out to matter for other field
   types, but it is not required for owner/status/default-applicable specifically.
 - To drop an entity's access entirely, omit its `<access-right>` when copying the type-21
-  response back in — confirmed: the entity's access-right disappears from the next type-21
+  response back in — the entity's access-right will no longer appear on the next type-21
   fetch.
 - `primary-access-right` values may not be echoed back verbatim. Granting a higher-level
   right (e.g. Full Control) causes the server to normalize/expand the stored value to include

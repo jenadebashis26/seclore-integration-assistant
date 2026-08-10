@@ -246,7 +246,7 @@ filename = cd.split("filename=")[-1].strip('"') if "filename=" in cd else "prote
 ```
 
 > **Note:** Protected files are automatically deleted from the API Server after download.
-> You get one attempt — if the download fails mid-stream, you must re-upload and re-protect.
+> You get one attempt — if the download fails mid-stream, you must re-protect with the same file storage ID.
 > Buffer the response to a temp file first, then move to the final destination to avoid
 > partial-write failures.
 
@@ -462,7 +462,7 @@ dynamically.
 | `fileExternalReference.externalReferenceId` | Recommended | This is the ID returned in the ARA callback as `<ext-id>`. Use your application's file ID. If no file-level ID exists, construct one (e.g., `fileId_folderId_dept`) |
 | `*Name`, `*Data`, `*AppId` | Optional | Metadata passed to your ARA service in the callback |
 
-**When to use:** Access control is managed in the integrating application, not in PS. Rights
+**When to use:** Access control is managed in the integrating application, not in Policy Server. Rights
 can change after protection without re-protecting the file.
 
 For ARA callback implementation, see `references/policy-federation-api.md`.
@@ -491,8 +491,7 @@ Unprotects a Seclore-protected file that belongs to the same tenant (EA).
 The response contains a **new** `fileStorageId` pointing to the decrypted file. Download
 it using the Download API.
 
-> The API Server can only unprotect files belonging to its configured EA. It does not have
-> an equivalent of the SDK's "Unprotect Any File" advanced privilege via the API.
+> The API Server can only unprotect files belonging to its configured EA if advanced security is disabled for that EA. To unprotect any file, advanced security should be enabled for EA.
 
 ---
 
