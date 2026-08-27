@@ -22,10 +22,8 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 - **All SDK operations** — Protect, Unprotect, SendRequest
 - **Advanced Security** — RSA key pair setup, `DefaultCryptoHandler`, advanced privileges (Unprotect Any File, Add/Update other EAs)
 - **Policy Federation ARA callback service** — implementing the 3 HTTP endpoints (Ping, GetAccessRight, GetFileInformation), request/response XML, access rights, offline access, watermark, response scenarios, testing with Postman, and troubleshooting
-- **File/Hot Folder External Reference ID behavior** — how `file-extn-reference.extn-ref-id` de-duplicates across Hot Folders (reusing it reuses the original file's Seclore File ID, encryption key, and permissions), the uniqueness requirement, and how this relates to `PROTECT_WITH_FILE_ID`
 - **DRM API Server integration** — architecture, API vs SDK decision, all REST endpoints, file upload/protect/download lifecycle, authentication (JWT tokens, refresh), storage options (disk/S3/DB), deployment, error codes, best practices, and sample code in Java and curl
 - **Seclore Online Integration** — in-app file open without downloading, security model (in-memory decryption, HTTPS streaming), iFrame deprecation, EA endpoint implementation (checkFile, getFile, putFile, initEdit, edit, renewToken, open/close events), proof key validation (RSA 3-combination check), access token lifecycle (JWT generation, renewal on 401), CFAD (native desktop open), and design considerations
-- **Checking file protection status** — with SDK (`isProtectedFile`, `isHTMLWrapped`, `isSupportedFile`) and without SDK (byte-level signature detection, no SDK dependency — suitable for storage layers, DLP tools, and content management systems)
 - **Seclore Endpoint SDK** — `SecloreActionDispatcher.exe` integration for DLP/classification tools; protect (self and policy), protectshare, share, and classify actions; bulk classification via `BulkClassifier.exe`; Mac Seclore Lite support; troubleshooting and log locations
 - **Identity Federation** — native repositories vs. Custom Repository Adaptor (CRA); SAML 2.0, OAuth 2.0, and OpenID Connect protocol detail; pure API-based CRA flow and security hardening; User Search and when it's optional; Seclore repository/adaptor concepts
 - **SIEM / Activity & Audit Log Integration** — pushing DRM/DAC/audit logs to a customer's SIEM via the "Seclore for SIEM" tool (Logstash, output mechanisms, priority values), and direct SQL access to the on-premises `EXTFILEUSERACTIVITYVIEW`/`EXTAUDITLOGVIEW` database views (column reference, activity/audit codes, sample queries)
@@ -164,7 +162,6 @@ seclore-integration-assistant/
 | v1.5 | Added sendRequest() methods details to Manage Policy, EA and Hot Folder.|
 | v1.6 | Added Identity Federation — SAML 2.0, OAuth 2.0, OpenID Connect, Custom Repository Adaptor (all four flavors), User Search, Seclore repository/adaptor concepts |
 | v1.7 | Added SIEM / Activity & Audit Log Integration — push-based Seclore for SIEM tool and direct EXTFILEUSERACTIVITYVIEW/EXTAUDITLOGVIEW database-view access |
-| v1.8 | Clarified File/Hot Folder External Reference ID dedup behavior (Policy Federation and SDK guides) and fixed the non-unique file ID disambiguation guidance |
 
 ---
 
