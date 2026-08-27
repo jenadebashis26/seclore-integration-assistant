@@ -36,6 +36,34 @@ What happens:
   the application's file ID and the Seclore File ID
 - The access policy is **not stored in Seclore** — it exists only in the integrating application
 
+The Seclore File ID / encryption key assignment described above only happens on the **first**
+protection for a given `file-extn-reference.extn-ref-id`. If a later protect call reuses that same
+File External Reference ID, Policy Server does not mint a new File ID or key — it reuses the
+existing file's mapping, encryption key, and Seclore File ID instead. The
+`hot-folder-extn-reference.extn-ref-id` passed on that later call is ignored completely: it does
+not move the file to a different Hot Folder or apply that Hot Folder's policy. The file's
+permissions stay exactly what the original protection assigned. Treat
+`file-extn-reference.extn-ref-id` as the sole identity key across Hot Folders — once set, it pins
+File ID, encryption key, and permissions to the original protection regardless of what Hot Folder
+reference accompanies later calls.
+
+**This makes the File External Reference ID's uniqueness a hard requirement, not a nicety.**
+Always emphasize it when scoping a Policy Federation implementation: `file-extn-reference.extn-ref-id`
+must uniquely identify one file within the integrating application. If the application doesn't
+already have a field guaranteed unique per file, build one by concatenating other identifiers it
+does have — e.g. folder ID + file ID — before using it as the File External Reference ID. A
+collision silently attaches the new protection to an unrelated existing file's identity and
+permissions, rather than failing with an error.
+
+**The same dedup mechanism exists at the SDK level as `PROTECT_WITH_FILE_ID`** (protecting a new
+file by passing an already-protected file's Seclore File ID directly, rather than looking it up via
+an external reference). Both mechanisms reach the same outcome — reuse of key, File ID, and
+permissions — the only difference is which identifier drives the lookup. The common, intentional
+reason to reuse either is wanting the *same* protected file every time a given document is
+downloaded, by one user or many — a new download shouldn't need its own permission definition.
+Reconsider reuse when the file's version changes: carrying the old identifier forward onto a new
+version also carries forward its key and permissions, which the application may or may not want.
+
 ### Phase 2 — File Open & Dynamic Rights Resolution (happens every time a user opens the file)
 
 ```
@@ -291,16 +319,24 @@ can use them (e.g. `<ext-data>` holding a folder/library ID) the same way it use
 
 **How many Hot Folders do you need?** If your application already has a globally unique file ID,
 one Hot Folder is enough — the ARA decision is driven entirely by `<ara-file-details><ext-id>`, and
-the Hot Folder itself plays no role in who gets access. Use multiple Hot Folders when you want:
-- **Logical segregation** — e.g. one HF per folder/library/site, purely for organizational clarity
-  in the Seclore admin console.
-- **Disambiguating non-unique file IDs** — if your file IDs are only unique *within* a folder or
-  library (not globally), you have two options: (a) create a separate HF per folder/library and set
-  the folder/library ID as that HF's `<ext-app-id>`/`<ext-data>` at creation, so the ARA request tells
-  you which folder the file belongs to; or (b) keep one HF for protection and instead make the
-  *file-level* external reference globally unique yourself, e.g. by concatenating folder ID + file ID
-  (`"FOLDER123_FILE456"`) before protecting, then splitting that string back apart in your ARA logic
-  when the request comes in.
+the Hot Folder itself plays no role in who gets access. Use multiple Hot Folders for **logical
+segregation** — e.g. one HF per folder/library/site, purely for organizational clarity in the
+Seclore admin console — while the file-level external reference stays globally unique regardless
+of which HF protected it.
+
+**If your file IDs are only unique *within* a folder or library (not globally), multiple Hot
+Folders do not fix that.** You must make the *file-level* external reference
+(`file-extn-reference.extn-ref-id`) globally unique yourself before protecting — e.g. by
+concatenating folder ID + file ID (`"FOLDER123_FILE456"`), then splitting that string back apart in
+your ARA logic when the request comes in. This is not optional, and creating a separate Hot Folder
+per folder/library does **not** work as a substitute: Seclore's dedup check runs on
+`file-extn-reference.extn-ref-id` alone, before the Hot Folder is considered at all. If a second
+protect call reuses a file-level ID that already matches an existing file — even under a different
+Hot Folder, with a different `<ext-app-id>`/`<ext-data>` set on that HF — Seclore does not store
+anything from that second request. It looks up the existing file by that external reference ID and
+returns the existing file's encryption key and Seclore File ID unchanged; the second request's Hot
+Folder is never recorded against a new file, so the ARA callback for that "second" file will still
+report the *first* file's Hot Folder details, not the one you actually passed.
 
 ### Client Numbers
 

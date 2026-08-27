@@ -1148,6 +1148,40 @@ protected file     reads file ID          reads fileExtRefId    checks own DB
 | `hot-folder-extn-reference.extn-ref-id` | Identifies WHICH Hot Folder (protection policy) to use. One HF per integration, typically. | Policy Server admin configures HF with this ID; your code passes it at protect time |
 | `file-extn-reference.extn-ref-id` | Identifies THIS SPECIFIC FILE in your application. Used in the Policy Server callback to your app. | Your code generates it at protect time; your DB stores it |
 
+Seclore checks `file-extn-reference.extn-ref-id` before protecting a file. If a protect request
+reuses a value that already matches a file Policy Server knows about, Seclore does **not** issue a
+new Seclore File ID or a new encryption key — it protects using the existing file's encryption key
+and assigns the same Seclore File ID as the original protection. The `hot-folder-extn-reference.extn-ref-id`
+passed on that later request is ignored completely — it does not move the file to the new Hot
+Folder or apply that Hot Folder's policy. The file's permissions/policy stay exactly what the
+**original** protection assigned, regardless of which Hot Folder external reference ID accompanies
+the later call. In practice, `file-extn-reference.extn-ref-id` is the sole identity key across Hot
+Folders — once a value has been used, every later protect call with that same value is treated as
+the same file, and File ID, encryption key, and permissions all stay pinned to the original
+protection.
+
+**Because of this, `file-extn-reference.extn-ref-id` must be unique per file in the integrating
+application.** Always raise this when someone is implementing `PROTECT_WITH_HF_EXT_REF` — an
+accidental collision silently reuses the wrong file's identity and permissions rather than failing
+loudly. If the application doesn't already have a single field that's guaranteed unique per file,
+construct one by concatenating other identifiers it does have — e.g. `folderId + "-" + fileId` —
+before passing it as the file external reference ID.
+
+**This is the same dedup mechanism as `PROTECT_WITH_FILE_ID`, just keyed differently.**
+`PROTECT_WITH_FILE_ID` (see the ProtectionType table earlier in this document) takes the Seclore
+File ID directly and reuses that file's key/permissions; `PROTECT_WITH_HF_EXT_REF` reaches the same
+outcome indirectly, by looking up whichever file the application's own `file-extn-reference.extn-ref-id`
+already resolves to. Functionally identical result, different identifier driving the lookup.
+
+**Common, intentional use of this reuse:** an application wants the *same* protected file — same
+encryption, same File ID, same permissions — every time a given document is downloaded, whether by
+multiple users or repeatedly by the same user. Passing the same identifier on every download (the
+Seclore File ID via `PROTECT_WITH_FILE_ID`, or the same file external reference ID via
+`PROTECT_WITH_HF_EXT_REF`) achieves exactly that, without needing to re-define permissions on each
+download. Revisit this choice if the underlying file's content/version changes — reusing the same
+identifier for a new version carries forward the old version's key and permissions, which may or
+may not be what the application wants; a new version may warrant a new identifier instead.
+
 **Practical guidance:**
 - Create one Hot Folder per integration (or one per business unit / document type)
 - Set a stable External Reference ID on that HF (e.g., `FINANCE-HF-001`)

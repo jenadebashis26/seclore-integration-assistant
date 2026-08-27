@@ -339,6 +339,19 @@ See `references/code-samples.md` for the full XML structures. Summary:
 will call your application at file-open time to ask for the user's access rights. You must
 implement an HTTP service — the Access Right Adaptor (ARA) — that answers these callbacks.
 
+**File External Reference ID must be unique per file — always flag this when helping someone
+implement `PROTECT_WITH_HF_EXT_REF`.** Seclore deduplicates on `file-extn-reference.extn-ref-id`:
+reusing a value reuses the original file's Seclore File ID, encryption key, and permissions
+instead of creating a new protected file (see `references/sdk-guide.md`). If the integrating
+application doesn't already have a naturally unique per-file identifier, concatenate other
+identifiers it does have — e.g. folder ID + file ID — to construct one before passing it as
+`file-extn-reference.extn-ref-id`. This dedup behavior mirrors `PROTECT_WITH_FILE_ID` above — the
+only difference is which identifier drives the lookup: `PROTECT_WITH_FILE_ID` takes the Seclore
+File ID directly, while `PROTECT_WITH_HF_EXT_REF` resolves it via the file external reference ID.
+Full detail, including the common intentional use of this reuse (the same file downloaded
+repeatedly, by one user or many, should get the same encryption every time — revisit if the file's
+version changes), is in `references/sdk-guide.md` and `references/policy-federation-api.md`.
+
 Three endpoints are required:
 
 | Endpoint | Purpose |
@@ -1437,6 +1450,9 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | What happens if the ARA returns an HTTP error (500, 401, etc.)? | PS logs the HTTP error and shows a standard "contact administrator" message to the user. The ARA service never receives the request in connectivity failure cases. |
 | How does PS identify the file in the ARA callback? | Via `<ara-file-details><ext-id>` — the File External Reference ID your app passed at protection time in `<file-extn-reference>`. Use this to look up the file in your system. |
 | How does PS identify the user in the ARA callback? | Via `<ara-user-details><email-id>` (most reliable for lookups) plus `<rep-code>` and `<ext-id>` (SID/external ID). |
+| If I protect with the same file external reference ID but a different Hot Folder external reference ID, does Seclore assign a new Seclore File ID? | No — Seclore checks `file-extn-reference.extn-ref-id` before protecting. If it matches an existing one, Seclore reuses the existing file's encryption key and assigns the same Seclore File ID. The `hot-folder-extn-reference.extn-ref-id` passed on that call is ignored completely — it does not move the file to the new Hot Folder or apply that Hot Folder's policy. The file's permissions stay exactly what the original protection assigned. `file-extn-reference.extn-ref-id` is the sole identity key across Hot Folders. |
+| Does `file-extn-reference.extn-ref-id` need to be unique? | Yes — it must uniquely identify one file within the integrating application. A collision silently attaches the new protection to an unrelated existing file's identity and permissions rather than failing with an error. If the application has no naturally unique per-file field, build one by concatenating other identifiers — e.g. folder ID + file ID — before using it as the file external reference ID. |
+| How does `PROTECT_WITH_HF_EXT_REF`'s dedup relate to `PROTECT_WITH_FILE_ID`? | Same mechanism, different key. `PROTECT_WITH_FILE_ID` takes the Seclore File ID directly and reuses that file's encryption key/permissions; `PROTECT_WITH_HF_EXT_REF` reaches the same outcome indirectly, via whatever file `file-extn-reference.extn-ref-id` resolves to. Both are the right tool when an application wants the same protected file — same key, same File ID, same permissions — every time a document is downloaded, by one user or many. Reconsider reuse when the file's version changes, since it carries the old key/permissions forward onto the new version. |
 | SDK vs DRM API Server — key difference? | SDK is an embedded Java library — file stays local, lower latency, accepts file path only. API Server is an HTTP middleware — language-agnostic, file travels over HTTP for protection, HTML-wrapped output only. A Java app can use either; non-Java apps must use the API Server. |
 | Can individual end users authenticate to the SDK for any operation? | No. The SDK only authenticates as the Enterprise Application (ID + Passphrase, optionally RSA key pair) — for protect, unprotect, and every other call. There is no end-user credential parameter on any SDK method. This is a deliberate security boundary, not a gap. Per-user access control is enforced via protection-time rights (entity IDs, Hot Folder, Independent Rights), not by passing a user identifier to unprotect. Identity Federation/CRA does not change this; it governs browser/redirect-based login flows, not SDK calls. |
 | Why doesn't the SDK support individual user / end-user authentication? | Security. Give the one-line reason by default; if asked to go further, the three documented reasons are in Mode 1's "SDK authentication using Individual User or End User" section: credential custody (app would have to hold/transmit user passwords), privilege escalation risk (SDK can't verify a password belongs to the claimed user), and breaking under MFA (headless calls can't complete an MFA challenge). These three are documented — don't claim no rationale exists. |

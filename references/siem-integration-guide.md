@@ -275,6 +275,20 @@ were closed.
 clients (Android, iOS, Windows FS Lite, Lite Online) log opens as `13` (View in Lite Viewer). A
 query for "all opens" must include both: `WHERE ACTIVITY = 2 OR ACTIVITY = 13`.
 
+**Enable Offline Access (17) is the manual, user-driven path** — distinct from activity 14
+("Creating offline permissions," the owner/protector granting offline rights at protection time).
+Activity 17 is logged when an end user manually enables offline access on already-protected
+files/folders they can already access:
+
+1. Right-click the file(s) or folder.
+2. Select **Advanced → Enable Offline Access**.
+3. Seclore authenticates the user and downloads offline licenses for all selected files.
+4. A progress dialog appears, followed by a confirmation message on completion.
+
+The resulting offline license is **machine-bound** — it can only be used on the same machine
+where it was enabled, by that same user. It doesn't transfer if the user copies the file to
+another machine or logs in as themselves elsewhere.
+
 **QID syntax** (`USER_QID`, `OWNER_QID`, `PROTECTOR_QID`, `CONTAINER_QID`): `<Repository
 Code>::<Unique ID within that repository>` — e.g. the user's SID for Active Directory, or the
 EntryUUID for FIM/SIM (OpenDJ-backed). `CONTAINER_QHCODE` follows the same repository-code prefix
