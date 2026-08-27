@@ -98,6 +98,32 @@ The original source file remains unaffected.
 
 ---
 
+**Q: Can the temporary file live on a RAM disk instead of physical disk, to avoid disk I/O?**
+
+The SDK's only stated requirement is a valid absolute file path with read/write access on the
+host machine — nothing in the requirement depends on the underlying storage medium. A
+RAM-disk-mounted path (e.g. tmpfs on Linux) satisfies that requirement at the OS level, so this
+is architecturally viable. This specific configuration is not something Seclore has tested or
+published guidance on, so treat it as something to validate yourselves (functional and
+performance testing) before relying on it in production. Also size the RAM disk for the source
+file and the protected output file existing side by side — the recommended temp-file flow above
+copies the source in before protecting, and `protectAndWrap` writes its output alongside the
+input, so both are present at once during the operation.
+
+---
+
+**Q: Is the SDK approach more secure than the DRM API Server, in terms of file handling?**
+
+The Server SDK operates directly on a file already present on the machine running the SDK — the
+file itself is never transmitted to Policy Server or across the network as part of the
+protection call. Policy Server only receives requests and metadata (policy application, session
+validation), never the raw file content. This is a structural difference from the DRM API Server
+model, where the integrating application uploads the file to the API Server over HTTP before
+protection happens. See `references/api-server-guide.md` Section 3 for the full SDK vs. API
+Server comparison, including the performance and security trade-offs of each.
+
+---
+
 **Q: Do we need to manage SDK connections manually, or does the SDK handle connection pooling?**
 
 `protectAndWrap` and `unwrapAndUnprotect` accept a `PSConnection` as the first parameter.
@@ -112,6 +138,34 @@ Yes — the SDK is designed for server-side bulk operations. The session pool in
 config controls concurrency: `<max-size>50</max-size>`. Each `protectAndWrap` call is
 independent and thread-safe. For large volumes, run multiple threads each with their own
 `FSHelper` reference.
+
+---
+
+**Q: What is the typical protection time per file, and how does it scale with file size?**
+
+Benchmark timings observed for `protectAndWrap`:
+
+| File Size | Protection Time |
+|-----------|-----------------|
+| 10–15 MB | 3–5 seconds |
+| 50 MB | 5–6 seconds |
+| 100 MB | 10–15 seconds |
+
+These are single-file, single-thread reference figures. Actual results depend on server
+hardware, Policy Server load, and network conditions between the SDK host and Policy Server —
+for bulk throughput, combine these with the concurrency guidance below rather than treating them
+as a fixed per-file rate at scale.
+
+---
+
+**Q: Does file size change after protection?**
+
+Yes. `protectAndWrap` output is approximately **30% larger** than the source file. This is due
+to the HTML wrapper it adds around the encrypted content. Factor this into storage and
+bandwidth planning for bulk protection jobs. This overhead figure is specific to the
+HTML-wrapped (`protectAndWrap`) output. `protectX` (native protection, no HTML envelope) does
+not carry the same wrapper and therefore adds about 64 KB to 128 KB of additional size to the
+source file.
 
 ---
 **Q: Can we configure the number of concurrent connections to the Policy Server? Is there a risk in setting the pool size too high?**
@@ -129,8 +183,8 @@ The default value is **50**. Set this based on the number of files your applicat
 intends to protect or unprotect concurrently.
 Each connection in the pool maps to an active session on the Policy Server.
 Increasing the pool size adds load on the Policy Server — so the hardware sizing of
-the PS environment must be factored in before scaling up. Coordinate with your
-infrastructure team to ensure the Policy Server can handle the expected concurrency
+the PS environment must be factored in before scaling up. Coordinate with your Seclore
+support team to ensure the Policy Server can handle the expected concurrency
 before increasing `<max-size>` beyond the default.
 
 ---

@@ -28,13 +28,28 @@ the standard download flow may be preferable.
 
 ## 2. Security Model
 
-- The file is **always protected** (encrypted) during transmission to Seclore Online Server
-- Once received, Seclore Online decrypts the file **in memory only** — never to disk
-- Decrypted content is streamed to a **secure container in the user's browser** over HTTPS
-- The browser-based viewer and editor enforce all Seclore DRM controls (view-only, print, edit, etc.)
+- The file is **always protected** (encrypted) — both in transit to Seclore Online Server and
+  at rest. Seclore Online never stores a file in plaintext; when the uploaded protected file is
+  cached to optimize repeat access (see Section 14), it stays in its Seclore-protected, encrypted
+  form for the entire cache lifetime.
+- Decryption happens only inside controlled Seclore Online containers — no human or
+  administrator access to decrypted content is possible at any point, including for Seclore's
+  own cloud/support personnel.
+- For editing, the decrypted content is converted into a rendering-ready binary format and the
+  decrypted intermediate is discarded immediately after that conversion.
+- For viewing, the decrypted content is converted into watermarked images for the browser;
+  those images are deleted once the session ends (see Section 14 for exact timing).
+- The rendered content is streamed to a **secure container in the user's browser** over HTTPS;
+  the browser-based viewer and editor enforce all Seclore DRM controls (view-only, print, edit,
+  etc.)
 - The enterprise application's access control decision is applied at open time — the user's
-  rights at that moment are honoured
-- The file content is never exposed to the browser's standard storage (no local caching of decrypted content)
+  rights at that moment are honoured, and permissions are re-evaluated on every access even when
+  a cached copy of the protected file is reused.
+
+For Seclore's own internal architecture (Seclore Online Server, Policy Server's role, Document
+Editor/Viewer), exact caching and purge windows, encryption-key handling (Master Data Key),
+infrastructure hardening, file size limits, and how Seclore prevents its own personnel from
+accessing customer file content, see **Section 14**.
 
 ---
 
@@ -634,3 +649,104 @@ an error. Ensure the token renewal endpoint is robust and returns new tokens rel
 | POST | `/seclore/1.0/renewToken` | Renew expired access token |
 | POST | `/seclore/1.0/files/{fileToken}/events/open` | Open event notification |
 | POST | `/seclore/1.0/files/{fileToken}/events/close` | Close event notification |
+
+---
+
+## 14. Internal Architecture, Caching, and File Security (Seclore-Managed Cloud Deployment)
+
+This section covers how Seclore Online itself is built and secured when Seclore hosts the
+service (Seclore-managed cloud deployment) — useful for answering customer and field-team
+questions about what happens to a file once it reaches Seclore Online, beyond the EA-side
+integration contract covered in the rest of this guide.
+
+### Components
+
+| Component | Role |
+|---|---|
+| Seclore Online Server | Central processor — manages file storage, decryption, and communication with the Document Editor and Document Viewer |
+| Policy Server | Authenticates user access and issues the encrypted File Key for a given file/user |
+| Document Editor | Converts decrypted content into a binary format for editing |
+| Document Viewer | Converts decrypted content into watermarked images for viewing |
+| Database | Temporarily stores the protected file and the encrypted File Key |
+| File Storage | Holds intermediate rendering files during a user's session |
+
+### File Key handling
+
+1. When a user opens a protected file, Seclore Online requests a File Key from Policy Server.
+2. If the user is authorized, Policy Server returns the File Key **encrypted with Seclore
+   Online's public key** — Policy Server never hands over a key Seclore Online could not itself
+   decrypt.
+3. The encrypted File Key is stored temporarily in Seclore Online's database until the file is
+   closed — it's needed again to re-protect an edited file on save.
+4. Once the file is closed, the encrypted File Key is deleted from the database.
+5. Seclore Online's own private key (used to decrypt that File Key) is itself encrypted using a
+   **Master Data Key (MDK)**. Bring Your Own Key (BYOK) is **not** supported for the MDK.
+
+### Edit vs. view rendering
+
+- **Edit mode:** the Document Editor requests decrypted content from Seclore Online; Seclore
+  Online decrypts it and hands it to the Editor, which converts it into a rendering-ready binary
+  format. The decrypted file is discarded immediately after that conversion.
+- **View mode:** the Document Viewer requests decrypted content from Seclore Online, decrypts
+  it, and converts it into watermarked images for the browser. These images are deleted
+  automatically once the session ends.
+- Throughout, all communication (browser ↔ Seclore Online, and Seclore Online ↔ Editor/Viewer)
+  is secured with HTTPS and token-based authentication.
+
+### Data caching & purging
+
+- An uploaded protected file is **cached for up to 7 days**. If another user (or the same user
+  again) accesses that same file within that window, Seclore Online reuses the cached protected
+  copy instead of requiring a fresh upload — this speeds up repeat access, it does not skip
+  access control: **permission is still evaluated on every single access**, regardless of
+  whether the file was already cached.
+- This caching applies both to files opened directly (double-click) and to files opened through
+  integration flows (e.g. via SharePoint or Microsoft Teams).
+- On each open, a **user-specific session copy** of the file is created; after the user closes
+  the file in the browser, that session copy is deleted — typically within **2 to 4 minutes**.
+- For editors specifically, the decrypted version of the file is held only temporarily and is
+  removed from the file store 2–4 minutes after the file is closed.
+- For viewers, the file and any generated watermarked images are deleted 2–4 minutes after the
+  file is closed.
+- Independent of the above, cached protected files are purged entirely after **7 days**.
+
+### Infrastructure hardening
+
+- Communications are encrypted end-to-end (HTTPS, token-based authentication); private keys are
+  themselves encrypted at rest using the Master Data Key.
+- Seclore Online runs in private subnets with strict IAM roles, MFA, and network segmentation.
+- Intrusion detection is handled via XDR agents and native AWS tooling.
+- A 24x7 SOC team continuously monitors audit logs across all components.
+
+### Can Seclore's own personnel access customer files?
+
+No. Encryption keys are themselves encrypted and can only be decrypted by the Seclore
+application — not by administrators or cloud-team personnel. Decryption happens exclusively
+inside controlled Seclore Online containers, with no human access path. Files temporarily held
+in shared storage during processing stay in encrypted form and are deleted automatically once
+the session ends; automated cleanup scans also catch and remove files left behind by an
+unexpectedly terminated session. This is reinforced by least-privilege IAM roles, restricted
+network access, file-system permissions, encryption at rest and in transit, and continuous
+logging/monitoring.
+
+### File size limits
+
+| File type | Default limit | Successfully tested up to |
+|---|---|---|
+| PDF | 50 MB | 65 MB |
+| MS Office, TXT, image, and other file types | 10 MB | 13 MB |
+
+Limits are configurable per deployment. For a requirement beyond the tested figures above,
+check feasibility with Seclore's Product Management team before committing to a customer.
+
+### Factors affecting performance
+
+- **File size** — upload time scales with file size; Seclore mitigates this by keeping a
+  temporary copy of the file on the server rather than re-uploading on every access.
+- **File content** — the type and complexity of the content affects conversion time into the
+  Viewer/Editor's rendering format.
+- **Page count (Viewer):** each page is converted into an image for viewing, so performance
+  scales with the number of pages.
+- **Editor UI caching (Editor):** the Editor's static UI assets (HTML/CSS/JS) are cached in the
+  browser after the first file is opened, so subsequent files opened in the same browser session
+  render noticeably faster.

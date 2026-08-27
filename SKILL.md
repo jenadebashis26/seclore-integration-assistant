@@ -1073,9 +1073,9 @@ Load `references/seclore-online-guide.md` before responding to any question in t
 #### What Seclore Online does
 
 Protected files open directly in the browser or desktop client when a user clicks a file
-name. No download is required. The file is uploaded to Seclore Online Server, decrypted
-in-memory after auth, and streamed to a secure container in the browser over HTTPS. All
-DRM controls are enforced.
+name. No download is required. The file is uploaded to Seclore Online Server in its protected
+(encrypted) form, decrypted after auth, and the rendered content is streamed to a secure
+container in the browser over HTTPS. All DRM controls are enforced.
 
 **When not to use:** High-performance or high-throughput scenarios — the file travels over
 the network to Seclore Online before rendering, adding latency.
@@ -1085,7 +1085,7 @@ the network to Seclore Online before rendering, adding latency.
 | Party | Role |
 |-------|------|
 | Enterprise Application (EA) | Your app — hosts the file, issues access tokens, implements callback endpoints |
-| Seclore Online (SO) | Orchestrates the open flow, decrypts in memory, renders the file |
+| Seclore Online (SO) | Orchestrates the open flow, decrypts the file, renders it for the browser |
 | Policy Server (PS) | Authenticates the user, enforces DRM rights |
 
 #### Key concepts
@@ -1135,6 +1135,21 @@ FILETIME format) — not Unix milliseconds.
 
 **Deprecated.** Chrome and Safari block third-party cookies by default; iFrame embeds break
 Seclore Online auth. Always open in a **top-level browser window or tab**.
+
+#### File handling, caching, and security (Seclore-managed cloud deployment)
+
+The uploaded protected file is cached for up to 7 days to speed up repeat access (both direct
+opens and integration-flow opens, e.g. via SharePoint/Teams) — caching never skips the
+permission check, which is re-evaluated on every access. Decrypted/rendered content is
+short-lived: the decrypted intermediate used for editing is discarded immediately after
+conversion, and per-session copies/watermarked images are deleted roughly 2–4 minutes after the
+user closes the file. Decryption happens only inside controlled Seclore Online containers —
+there is no path for Seclore's own personnel (including cloud/support staff) to access decrypted
+customer file content. Seclore Online's own private key is itself encrypted with a Master Data
+Key (BYOK is not supported). Default file size limits are 50 MB for PDF and 10 MB for other
+formats (configurable; tested up to 65 MB / 13 MB respectively). Full detail — architecture,
+exact caching/purge windows, key handling, infrastructure hardening, and the "can Seclore access
+my files" answer — is in `references/seclore-online-guide.md` Section 14.
 
 For full implementation details, flows, Java code examples, and configuration: load
 `references/seclore-online-guide.md`.
@@ -1444,7 +1459,10 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | Which unprotect method for HTML-wrapped files? | `unwrapAndUnprotect()` — returns `UnprotectedFile`, pre-check with `isHTMLWrapped()`. |
 | What does `getFileId()` return for `wrap()` and `unwrap()`? | Always `null` — Policy Server does not assign a new File ID during envelope operations. |
 | Where is the Javadoc? | `Doc/API Documentation/FSHelperLibrary/` in the SDK distribution. |
-| What is the default session pool size? | 50 (configurable via `<max-size>` in tenant config). Size it based on active concurrent users of the integrating application. |
+| What is the default session pool size? | 50 (configurable via `<max-size>` in tenant config). Size it based on active concurrent users of the integrating application. Increasing it adds load on Policy Server — coordinate with your Seclore support team before scaling up. |
+| Can the SDK's temp file live on a RAM disk instead of physical disk? | Architecturally yes — the SDK only requires a valid absolute path with read/write access, regardless of storage medium. Not something Seclore has tested or published guidance on, so validate functionally and for performance before relying on it in production, and size the RAM disk for source + protected output existing side by side. |
+| How long does `protectAndWrap` typically take, and does file size affect that? | Single-file, single-thread reference figures: 10–15 MB → 3–5s, 50 MB → 5–6s, 100 MB → 10–15s. Actual results depend on server hardware, Policy Server load, and network conditions — combine with session-pool concurrency for bulk throughput estimates. |
+| Does file size change after protection? | Yes — `protectAndWrap` output is ~30% larger than the source (HTML wrapper overhead). `protectX` (native, no HTML envelope) adds only ~64–128 KB instead. Factor this into storage/bandwidth planning for bulk jobs. |
 | What does `-2500020` / `ARAException: Unknown Response Status '0'` mean? | The ARA service returned `<status>0</status>` — not a valid value. Fix: always return `<status>1</status>`; deny access via `<primary-access-right>0</primary-access-right>`. |
 | Does Policy Federation require the ARA to be online whenever a file is opened? | Yes. PS calls the ARA for every file open. If the ARA is unreachable, PS cannot grant access and will show an error to the user. |
 | What happens if the ARA returns an HTTP error (500, 401, etc.)? | PS logs the HTTP error and shows a standard "contact administrator" message to the user. The ARA service never receives the request in connectivity failure cases. |
@@ -1463,7 +1481,10 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | What storage backends does the API Server support? | Disk/shared folder (EFS/Azure Files), AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL). |
 | Does the API Server require its own database? | Yes. Always required for tokens, PS config, and file metadata. Does not need to be large. |
 | What happens to files after protection download? | Protected files are auto-deleted from API Server after download. Unprotected uploads are auto-deleted after a configurable timeout. |
-| What is Seclore Online Integration? | Allows users to open protected files in-browser or natively (CFAD) without downloading. The file is decrypted in-memory by Seclore Online Server after auth, then streamed over HTTPS to a secure browser container. |
+| What is Seclore Online Integration? | Allows users to open protected files in-browser or natively (CFAD) without downloading. Seclore Online Server decrypts the file after auth, then streams the rendered content over HTTPS to a secure browser container. |
+| Does Seclore Online cache uploaded files? | Yes — the uploaded protected (still-encrypted) file is cached for up to 7 days to speed up repeat access, for both direct opens and integration-flow opens (SharePoint/Teams). Permissions are still re-evaluated on every access regardless of caching. Decrypted/rendered content is short-lived: discarded immediately after conversion (editing) or deleted ~2–4 minutes after the user closes the file (viewing). |
+| Can Seclore's own personnel access customer files uploaded to Seclore Online? | No. Encryption keys are themselves encrypted and only decryptable by the Seclore application — decryption happens exclusively inside controlled Seclore Online containers with no human access path, for administrators or cloud/support staff alike. Temporary files are encrypted at rest and auto-deleted when the session ends, with automated cleanup for abandoned sessions. |
+| What are the default file size limits in Seclore Online? | 50 MB for PDF, 10 MB for other formats (MS Office, TXT, images) — configurable per deployment. Tested up to 65 MB (PDF) and 13 MB (other formats); check feasibility with Seclore Product Management for anything larger. |
 | What is CFAD? | Cloud File Access on Desktop — opens a protected file natively via Seclore Desktop Client. Triggered by passing `agentless=0` in the `/open` form POST. |
 | What is a File Token in Seclore Online? | Your app's unique string identifier for a file. Seclore Online includes it in all callback requests so your app can locate the file. Must be URL-safe. |
 | What is the Access Token TTL format? | An absolute Unix millisecond timestamp (ms since epoch, Jan 1 1970 UTC) — not a duration. Example: `System.currentTimeMillis() + 3600000` for 1 hour from now. |

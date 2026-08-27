@@ -23,7 +23,7 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 - **Advanced Security** — RSA key pair setup, `DefaultCryptoHandler`, advanced privileges (Unprotect Any File, Add/Update other EAs)
 - **Policy Federation ARA callback service** — implementing the 3 HTTP endpoints (Ping, GetAccessRight, GetFileInformation), request/response XML, access rights, offline access, watermark, response scenarios, testing with Postman, and troubleshooting
 - **DRM API Server integration** — architecture, API vs SDK decision, all REST endpoints, file upload/protect/download lifecycle, authentication (JWT tokens, refresh), storage options (disk/S3/DB), deployment, error codes, best practices, and sample code in Java and curl
-- **Seclore Online Integration** — in-app file open without downloading, security model (in-memory decryption, HTTPS streaming), iFrame deprecation, EA endpoint implementation (checkFile, getFile, putFile, initEdit, edit, renewToken, open/close events), proof key validation (RSA 3-combination check), access token lifecycle (JWT generation, renewal on 401), CFAD (native desktop open), and design considerations
+- **Seclore Online Integration** — in-app file open without downloading, security model (encrypted caching, HTTPS streaming, Master Data Key-protected keys, no personnel access to decrypted content), iFrame deprecation, EA endpoint implementation (checkFile, getFile, putFile, initEdit, edit, renewToken, open/close events), proof key validation (RSA 3-combination check), access token lifecycle (JWT generation, renewal on 401), CFAD (native desktop open), file size limits, and design considerations
 - **Seclore Endpoint SDK** — `SecloreActionDispatcher.exe` integration for DLP/classification tools; protect (self and policy), protectshare, share, and classify actions; bulk classification via `BulkClassifier.exe`; Mac Seclore Lite support; troubleshooting and log locations
 - **Identity Federation** — native repositories vs. Custom Repository Adaptor (CRA); SAML 2.0, OAuth 2.0, and OpenID Connect protocol detail; pure API-based CRA flow and security hardening; User Search and when it's optional; Seclore repository/adaptor concepts
 - **SIEM / Activity & Audit Log Integration** — pushing DRM/DAC/audit logs to a customer's SIEM via the "Seclore for SIEM" tool (Logstash, output mechanisms, priority values), and direct SQL access to the on-premises `EXTFILEUSERACTIVITYVIEW`/`EXTAUDITLOGVIEW` database views (column reference, activity/audit codes, sample queries)
@@ -96,6 +96,16 @@ Can Seclore push activity and audit logs to our SIEM?
 Can we query Seclore's activity/audit logs directly from the database instead of using the SIEM tool?
 
 What does activity code 17 / audit code 24 mean?
+
+Can the SDK's temporary file live on a RAM disk instead of physical disk?
+
+How long does protectAndWrap typically take, and how much bigger does the file get?
+
+Can Seclore's own personnel access customer files uploaded to Seclore Online?
+
+Does Seclore Online cache uploaded files? For how long?
+
+What are the default file size limits in Seclore Online?
 ```
 
 ---
