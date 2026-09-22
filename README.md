@@ -9,7 +9,7 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 ## Installing in Claude Cowork
 
 1. Clone or download this repository
-2. In Claude, Go to Settings → Capabilities → Skills → Customize → Upload a skill
+2. In Claude, Go to Settings →  Skills → Add → Upload a skill
 3. Import the zip to use the skill
 4. The skill will be available as `/seclore-integration-assistant`
 
