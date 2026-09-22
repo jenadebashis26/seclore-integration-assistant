@@ -312,6 +312,28 @@ The app config XML sent to `FSHelperLibrary.initialize()` is malformed.
 
 ---
 
+### `FSHelperException: FSHelper session with the given identifier does not exists` (from `getHelper()`)
+
+**Don't read this as "a session was lost" — it usually means a session was never created.**
+`initializeHelper()` only stores the tenant config locally and never contacts Policy Server at
+that point (same as the authentication-failure case above). If the tenant config XML is
+malformed, that failure doesn't surface loudly at `initializeHelper()` — it fails silently, or
+gets swallowed depending on the integrating application's own error handling. The very next call,
+`getHelper(tenantId)`, then fails against a tenant ID that was never successfully initialized,
+producing this misleading "session does not exist" message instead of a clear config-validation
+error.
+
+- **Most common cause:** the tenant config XML's `<url>` block is missing `<port>443</port>` (or
+  it's present but blank) — easy to introduce when editing an existing config after the Policy
+  Server URL changes.
+- **Fix:** add or correct `<port>443</port>` (or whatever the correct Policy Server port is)
+  inside `<url>`. Re-run `initializeHelper()`.
+- **General troubleshooting takeaway:** always inspect the raw exception/log output from the
+  `initializeHelper()` call itself, not just the error that eventually surfaces at `getHelper()`
+  — they're often not describing the same failure. `logs\WSClient.log` is the place to look.
+
+---
+
 ### "Invalid EA credentials" / "EA Authentication failed" (-220001 or similar)
 
 - **Cause:** Wrong EA ID or passphrase.
@@ -534,6 +556,25 @@ Four scenarios. The EA number in the error message is the clue:
 
 ---
 
+### `WSClientException` — `Cannot invoke "...Repository.getAdapter()" because "<local10>" is null` (-240,011) — Protect with External Reference / Protect with File ID, Full Policy Federation
+
+- **When it appears:** Protecting via `PROTECT_WITH_HF_EXT_REF` or `PROTECT_WITH_FILE_ID`, on an
+  EA configured for Full Policy Federation.
+- **Cause:** Policy Server calls back to your ARA's `getaccessright` or `getfileinformation`
+  endpoint during this flow. If the response contains an incorrect `rep-code`, owner email
+  address, or classification ID that Policy Server cannot validate — most commonly,
+  `<ara-owner-details>` echoing back a fixed placeholder value instead of the `rep-code`/`ext-id`/
+  `email-id` PS actually sent — PS can't resolve it to an adaptor and throws an unhandled
+  exception rather than a clean validation error. The exact validation failure is logged on the
+  Policy Server side; the SDK only surfaces the generic `WSClientException` above.
+- **Fix:** on the integrating application's side, the `getfileinformation`/`getaccessright`
+  handler must echo back the owner, classification, and rep-code details it received in the
+  request rather than substituting a static value — unless it's deliberately reassigning
+  ownership with a `rep-code` that maps to a real, adaptor-bound repository. Full detail and
+  example XML are in `references/policy-federation-api.md`'s Troubleshooting section.
+
+---
+
 ### "Not protected with any HotFolder managed by you" (-220,473)
 
 - **Cause:** The file was protected by a different EA than the one currently initialized.
@@ -638,6 +679,7 @@ Four scenarios. The EA number in the error message is the clue:
 | -250001 | Policy Server connection error |
 | -260001 | Invalid XML in request |
 | -220473 | File not protected with any Hot Folder managed by this EA |
+| -240011 | Generic unhandled server-side exception (NPE) — seen across several inputs Policy Server doesn't validate cleanly. During Protect with External Reference/File ID on a Full Policy Federation EA: your ARA's `getaccessright`/`getfileinformation` response echoed back a `rep-code`/owner/classification PS can't resolve to an adaptor — echo the request's values instead of a placeholder. See `references/policy-federation-api.md` Troubleshooting. |
 ---
 
 ### Log file location

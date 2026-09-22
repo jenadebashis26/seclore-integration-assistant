@@ -4,7 +4,7 @@ description: >
   Use when a Java developer needs help integrating Seclore's rights management — SDK setup
   (FSHelper, FSHelperLibrary), protecting/unprotecting files (protectAndWrap, protectX, Hot
   Folder, Independent Rights), ARA/Policy Federation callbacks, troubleshooting SDK error codes
-  (-220133, -220372, -220473, -240003, DRM-1013, DRM-1105, -2500020), WSCLIENT/log4j2 config,
+  (-220133, -220372, -220473, -240003, -240011, DRM-1013, DRM-1105, -2500020), WSCLIENT/log4j2 config,
   Seclore Online (CFAD, proof keys, access tokens), Enterprise Applications (Advanced
   Security/Privileges), DLP integration via protect/unprotect APIs, file protection status
   (isProtectedFile, checkFile), DRM API Server vs Policy Server, BulkClassifier classification,
@@ -68,7 +68,11 @@ The full SDK reference guide is in `references/sdk-guide.md`. Java SDK code samp
 structures are in `references/code-samples.md`. Policy Federation ARA callback API — request/response
 XML, access rights, offline access, testing, and troubleshooting — is in `references/policy-federation-api.md`.
 DRM API Server integration — architecture, all REST endpoints, file lifecycle, storage options,
-error codes, and sample code — is in `references/api-server-guide.md`. Seclore Online Integration —
+error codes, and sample code — is in `references/api-server-guide.md`. What needs to be configured
+on the Policy Server and DRM API Server before you can call the API, the Admin Console API key
+walkthrough, testing (sanity script, Swagger), and who to contact — is in
+`references/api-server-config-guide.md`. Not a deployment guide — it doesn't cover installing or
+standing up the server. Seclore Online Integration —
 use case, security model, communication flows, EA endpoints, proof key validation, access token
 lifecycle, CFAD, and design considerations — is in `references/seclore-online-guide.md`.
 Seclore Endpoint SDK integration — architecture, all actions (protect, protectshare, share,
@@ -186,6 +190,14 @@ Server. EA credentials and reachability are validated on the first SDK operation
 Root element is `<fs-helper-ps-config>`. The `<server>` value is hostname only — no `https://`.
 Set `<allow-advanced-privileges>true</allow-advanced-privileges>` only when using advanced privileges.
 Full XML reference is in `references/code-samples.md`.
+
+> **`<port>` inside `<url>` is required — don't leave it blank or drop it when editing an
+> existing tenant config (e.g. after changing the Policy Server URL).** Because
+> `initializeHelper()` only stores the config locally and never contacts Policy Server at that
+> point (see above), a missing/blank `<port>` doesn't fail loudly there — it fails silently or
+> gets swallowed depending on the integrating app's own error handling. The failure only
+> surfaces later, and misleadingly, at `getHelper(tenantId)` as `FSHelperException: FSHelper
+> session with the given identifier does not exists` — see Mode 3.
 
 #### Standard vs Advanced Security initialization
 
@@ -363,6 +375,13 @@ Three endpoints are required:
 For the complete request/response XML, access right values, offline access, watermark support,
 response scenarios, testing guidance, and troubleshooting: **load `references/policy-federation-api.md`**.
 
+**Callbacks aren't limited to file-open time.** On a Full Policy Federation EA, protecting via
+`PROTECT_WITH_HF_EXT_REF` or `PROTECT_WITH_FILE_ID` can itself trigger a `getaccessright`/
+`getfileinformation` callback — so the ARA's owner/classification echo-back rule (respond with
+the same `rep-code`/`ext-id`/`email-id`/classification PS sent, don't substitute a placeholder)
+applies at protect time too, not only when a user later opens the file. Getting this wrong
+surfaces as a `WSClientException` (`-240011`) on the SDK side during protection — see Mode 3.
+
 PS configuration required: EA → Policy Federation → set type to Full Federation, enter the
 base URL of your service. Only Basic Auth is supported for authentication; IP-based restrictions
 are recommended as an additional security measure.
@@ -392,6 +411,23 @@ The SDK requires it at startup. See Mode 1 for the exact required content and co
 **Fix:** One or more required fields in the tenant config XML are blank or malformed —
 most likely `EA ID`, `passphrase`, or `<server>`. Verify the XML is well-formed and all
 required fields are populated.
+
+#### "FSHelperException: FSHelper session with the given identifier does not exists" (from `getHelper()`)
+**Don't read this as "a session was lost."** It commonly means a session was never created in
+the first place. `initializeHelper()` only stores the tenant config locally and never contacts
+Policy Server at that point (see Mode 1) — so a malformed tenant config XML doesn't fail loudly
+there; it fails silently or gets swallowed depending on the integrating app's error handling.
+`getHelper(tenantId)` then fails against a tenant ID that was never successfully initialized,
+surfacing this misleading message instead of a clear config-validation error.
+
+**Most common cause:** the tenant config XML's `<url>` block is missing `<port>443</port>` (or
+it's blank) — easy to introduce when editing an existing config after changing the Policy Server
+URL. **Fix:** add/correct `<port>` (443, or whatever the correct Policy Server port is) inside
+`<url>`.
+
+**General troubleshooting takeaway:** always check the raw exception/log output from the
+`initializeHelper()` call itself, not just the error surfaced later at `getHelper()` — the two
+are often not describing the same failure.
 
 #### "Sorry, authentication failed due to missing authentication token" / "Failed to authenticate the session"
 **Cause:** Policy Server rejected the EA login. This surfaces on the first SDK operation —
@@ -462,6 +498,15 @@ Hot Folders associated with the file. Use Unprotect Any File (requires Advanced 
 Advanced Privileges + `allow-advanced-privileges=true`).
 This error is distinct from -220133: -220133 = EA lacks the privilege; -220473 = EA simply
 doesn't own the file's Hot Folder.
+
+#### `WSClientException`: `Cannot invoke "...Repository.getAdapter()" because "<local10>" is null` (-240,011) — Protect with External Reference / File ID, Full Policy Federation
+**Fix:** Your ARA's `getaccessright`/`getfileinformation` response echoed back a `rep-code`,
+owner email, or classification ID that Policy Server can't validate — most commonly,
+`<ara-owner-details>` returning a fixed placeholder instead of the exact `rep-code`/`ext-id`/
+`email-id` PS sent in the request. Echo back the request's values unless you're deliberately
+reassigning ownership with a `rep-code` that maps to a real, adaptor-bound repository. PS logs
+the actual validation failure; the SDK only surfaces this generic exception. Full detail in
+`references/policy-federation-api.md` Troubleshooting.
 
 #### "Invalid file format 'X' for HTML unwrapping" / WSClientException on unprotect
 **Fix:** The file was protected with `protectX()` (native format, no HTML envelope). Call
@@ -1007,7 +1052,12 @@ top-level `<im-user>` block in the response.
 
 Someone is integrating with the Seclore DRM API Server (REST/HTTP) rather than the Java SDK.
 
-Load `references/api-server-guide.md` before responding to any question in this mode.
+Load `references/api-server-guide.md` before responding to any question in this mode. If the
+question is about getting started — what needs to be configured before the API can be used, the
+API key, testing your setup, or who to contact — also load `references/api-server-config-guide.md`.
+That file is not a deployment guide; don't use it to answer questions about installing or
+standing up the server itself — redirect those to Seclore's implementation team (see that file's
+"Who to contact" section).
 
 #### API Server vs SDK — decision rule
 
@@ -1019,12 +1069,16 @@ Load `references/api-server-guide.md` before responding to any question in this 
 #### Standard file protection flow
 
 ```
-1. POST /auth/login             → get accessToken
-2. POST /filestorage/upload     → upload file, get fileStorageId
-3. POST /protect/{type}         → protect, get new fileStorageId + secloreFileId
-4. GET  /filestorage/download/{id} → download the protected file
-5. DELETE /filestorage/delete/{id} → delete the original unprotected upload
+1. POST   /seclore/drm/filestorage/1.0/upload      → upload file, get fileStorageId
+2. POST   /seclore/drm/1.0/protect/{type}          → protect, get new fileStorageId + secloreFileId
+3. GET    /seclore/drm/filestorage/1.0/download/{id} → download the protected file
+4. DELETE /seclore/drm/filestorage/1.0/{id}        → delete the original unprotected upload
 ```
+
+Every call carries `Authorization: Bearer <api-key>` — there is no separate login step in the
+current (API key) model. (The legacy JWT flow, still functional but deprecated, does have a
+login step — see Authentication rules below.) Note the Delete path has no `/delete/` segment:
+it's `DELETE /seclore/drm/filestorage/1.0/{fileStorageId}`, not `.../delete/{id}`.
 
 Protection types map directly to the Server SDK patterns:
 
@@ -1037,29 +1091,46 @@ Protection types map directly to the Server SDK patterns:
 
 #### Authentication rules
 
-- Access token defaults to **15-minute expiry** (configurable)
-- Pass as `Authorization: Bearer <accessToken>` on every call
-- On `DRM-1013` (expired): call `/auth/refresh` with the refresh token, retry the original request
-- The `x-api-key` header is only required when using a Seclore-hosted (cloud) instance
+- **Current model — API key:** generated only via the Admin Console
+  (`https://<FQDN>/seclore/drm/admin`, login user `drmadmin`) — there is no REST endpoint for
+  key management. Pass it as `Authorization: Bearer <api-key>` on every call. No expiry timer —
+  it's valid until revoked in the Admin Console. See `references/api-server-config-guide.md`
+  for the full walkthrough (creating an Application, mapping it to an EA, generating the key)
+  and for what has to be configured on the Policy Server side (the EA) first.
+- **Legacy JWT flow (deprecated, still functional in 3.5.0.0):** `POST /auth/login` with
+  tenantId/tenantSecret → `accessToken` (15 min) + `refreshToken` (60 min); `POST /auth/refresh`
+  to renew; pass as `Authorization: Bearer <accessToken>`. Per the Admin Console Guide's own
+  FAQ, JWT and API key auth **coexist** in this release, but a future release will drop JWT
+  support — don't build new integrations on it.
+- `/health`, `/healthcheck`, and `/version` are the only endpoints that don't require
+  `Authorization` at all.
+- Optional on every call: `X-SECLORE-CORRELATION-ID` header, echoed into server logs — useful
+  for correlating a request across your logs and Seclore's when debugging.
 
 #### Key API Server facts
 
 - All protected output is **HTML-wrapped only** — there is no native protect equivalent via the API
+- **Unprotect Any File IS possible via the API Server** — don't tell a developer otherwise. It's the same `/unprotect` endpoint as standard unprotect, not a different call; it's unlocked by the calling Application's configuration in the Admin Console (Advanced Security + "Allow Advanced Privileges" checked) *and* the "Unprotect any file" privilege enabled on that EA in Policy Server — same two-sided model as the SDK's Advanced Privileges (Mode 4). See `references/api-server-guide.md` Section 9.
 - Files are held in API Server storage only temporarily: protected files auto-delete after download; unprotected uploads auto-delete after a configurable timeout
 - The API Server must be deployed in the customer environment (not the integrating app's machine) because raw unencrypted files pass through it
-- Storage backends: Disk/Shared folder, AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL)
+- Storage backends: Disk/Shared folder, AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL) — this is a server-side configuration choice, not something the API exposes; it determines the health-check component key name (see below)
 - The Application Database is always required — it stores tokens, PS config, and file metadata (not the files themselves unless DB storage is chosen)
+- Three distinct health endpoints exist: `/health` (full check, includes Policy Server reachability), `/healthcheck` (API Server's own components only — use this one for liveness probes that shouldn't depend on PS), `/application/health` (API-key-scoped, tenant-specific). Plus a plain-text `/version`.
+- What needs to be configured on the Policy Server (the EA) and DRM API Server (Admin Console Application + API key) before you can start calling the API — not how to deploy the server itself — is covered in `references/api-server-config-guide.md`.
 
 #### Error codes to know
 
 | Code | When it appears | Fix |
 |------|----------------|-----|
-| DRM-1013 | Access token expired | Call `/auth/refresh` |
+| DRM-1011 | Access token not sent | Add `Authorization: Bearer <api-key>` header |
+| DRM-1013 | Token expired | Legacy JWT flow only — call `/auth/refresh`; not applicable to the API key model, which doesn't expire on a timer |
 | DRM-1105 | EA initialization failed | Wrong EA ID or passphrase in API Server config |
 | DRM-1100 | File already protected | Don't re-upload an already-protected file |
 | DRM-1202 | File storage ID not found | File was auto-deleted; re-upload and re-protect |
 
 Full error code list and all endpoint details are in `references/api-server-guide.md`.
+What has to be configured before you can call the API, the API key walkthrough, testing your
+setup, and who to contact is in `references/api-server-config-guide.md` (not a deployment guide).
 
 ---
 
@@ -1413,6 +1484,7 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | What does `protectorDetails=""` mean? | Reserved parameter. Always pass empty string — it has no effect. |
 | Why doesn't `displayFileName` change the output path? | It is metadata for the PS audit trail only. Output path is always input directory + input filename + `.html`. |
 | What is TENANT_ID? | Any string that uniquely identifies the integrating application in your deployment. Use the same string in `initializeHelper` and `getHelper`. |
+| Why does `getHelper()` throw `FSHelperException: FSHelper session with the given identifier does not exists` even though `initializeHelper()` looked like it ran fine? | It probably didn't actually succeed — `initializeHelper()` only stores config locally and doesn't contact Policy Server, so a malformed tenant config (most commonly a missing/blank `<port>` in the `<url>` block) fails silently there instead of erroring loudly. `getHelper()` then fails against a tenant that was never really initialized. Fix the tenant config XML (add `<port>443</port>` or the correct port) and check the raw output of the `initializeHelper()` call itself, not just the `getHelper()` error. See Mode 3. |
 | Can the SDK talk to more than one EA or Policy Server at once? | Yes — register each as a separate tenant via `initializeHelper(TENANT_ID, ...)`; see Mode 1's "Multi-tenant" section. |
 | Does Advanced Security = Advanced Privileges? | No. Advanced Security is the RSA key pair auth mechanism. Advanced Privileges (Unprotect Any File, etc.) require Advanced Security + privilege flags enabled in PS + `allow-advanced-privileges=true` in config. |
 | Can I use Advanced Security without advanced privileges? | Yes. Initialize with `DefaultCryptoHandler` and set `<allow-advanced-privileges>false</allow-advanced-privileges>` in the tenant config. |
@@ -1466,6 +1538,7 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | What does `-2500020` / `ARAException: Unknown Response Status '0'` mean? | The ARA service returned `<status>0</status>` — not a valid value. Fix: always return `<status>1</status>`; deny access via `<primary-access-right>0</primary-access-right>`. |
 | Does Policy Federation require the ARA to be online whenever a file is opened? | Yes. PS calls the ARA for every file open. If the ARA is unreachable, PS cannot grant access and will show an error to the user. |
 | What happens if the ARA returns an HTTP error (500, 401, etc.)? | PS logs the HTTP error and shows a standard "contact administrator" message to the user. The ARA service never receives the request in connectivity failure cases. |
+| Why does `PROTECT_WITH_HF_EXT_REF`/`PROTECT_WITH_FILE_ID` fail with `WSClientException ... Repository.getAdapter() ... is null (-240011)` on a Full Policy Federation EA? | The protect-time callback to your `getaccessright`/`getfileinformation` endpoint returned a `rep-code`, owner email, or classification ID PS can't resolve — most often `<ara-owner-details>` echoing a placeholder instead of the values PS actually sent. Echo back the request's values unless deliberately reassigning ownership with a real, adaptor-bound `rep-code`. See Mode 3. |
 | How does PS identify the file in the ARA callback? | Via `<ara-file-details><ext-id>` — the File External Reference ID your app passed at protection time in `<file-extn-reference>`. Use this to look up the file in your system. |
 | How does PS identify the user in the ARA callback? | Via `<ara-user-details><email-id>` (most reliable for lookups) plus `<rep-code>` and `<ext-id>` (SID/external ID). |
 | If I protect with the same file external reference ID but a different Hot Folder external reference ID, does Seclore assign a new Seclore File ID? | No — Seclore checks `file-extn-reference.extn-ref-id` before protecting. If it matches an existing one, Seclore reuses the existing file's encryption key and assigns the same Seclore File ID. The `hot-folder-extn-reference.extn-ref-id` passed on that call is ignored completely — it does not move the file to the new Hot Folder or apply that Hot Folder's policy. The file's permissions stay exactly what the original protection assigned. `file-extn-reference.extn-ref-id` is the sole identity key across Hot Folders. |
@@ -1475,10 +1548,12 @@ sends standard SYSLOG/JSON/HTTP that any SIEM can ingest.
 | Can individual end users authenticate to the SDK for any operation? | No. The SDK only authenticates as the Enterprise Application (ID + Passphrase, optionally RSA key pair) — for protect, unprotect, and every other call. There is no end-user credential parameter on any SDK method. This is a deliberate security boundary, not a gap. Per-user access control is enforced via protection-time rights (entity IDs, Hot Folder, Independent Rights), not by passing a user identifier to unprotect. Identity Federation/CRA does not change this; it governs browser/redirect-based login flows, not SDK calls. |
 | Why doesn't the SDK support individual user / end-user authentication? | Security. Give the one-line reason by default; if asked to go further, the three documented reasons are in Mode 1's "SDK authentication using Individual User or End User" section: credential custody (app would have to hold/transmit user passwords), privilege escalation risk (SDK can't verify a password belongs to the claimed user), and breaking under MFA (headless calls can't complete an MFA challenge). These three are documented — don't claim no rationale exists. |
 | Does the DRM API Server support native protect (no HTML wrap)? | No. All protection via API Server produces HTML-wrapped files only. |
+| Is Unprotect Any File possible via the DRM API Server (REST API)? | Yes — this is not a limitation of the API. It's the same `/unprotect` endpoint as standard unprotect; the calling Application must have "Use Advanced security" + "Allow Advanced Privileges" checked in the Admin Console, and the "Unprotect any file" privilege must also be enabled on that EA in Policy Server — same two-sided requirement as the SDK's Advanced Privileges model. See `references/api-server-guide.md` Section 9 and `references/api-server-config-guide.md` Section 2. |
 | What is `fileStorageId`? | A transient handle returned by the Upload API. Used to reference the file in protect/download/delete calls. Not a Seclore File ID. |
 | What is `secloreFileId`? | The Seclore DRM identifier assigned by Policy Server after protection. Used for permission queries and updates. |
-| When does the API Server access token expire? | 15 minutes by default (configurable). On expiry (DRM-1013), call `/auth/refresh` — do not re-login from scratch. |
-| What storage backends does the API Server support? | Disk/shared folder (EFS/Azure Files), AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL). |
+| How does the DRM API Server authenticate calls? | API key model (current, recommended): generate a key via the Admin Console (`https://<FQDN>/seclore/drm/admin`) and pass `Authorization: Bearer <api-key>` — no expiry timer, no REST endpoint for key management. A legacy JWT flow (`/auth/login` → 15-min accessToken/60-min refreshToken) is still functional and coexists with API keys in 3.5.0.0, but a future release will drop it — don't build new integrations on it. See `references/api-server-config-guide.md`. |
+| When does the API Server access token expire? | Depends on the auth model: legacy JWT accessTokens expire after 15 minutes by default (configurable) — on expiry (DRM-1013), call `/auth/refresh`, do not re-login from scratch. API keys (the current model) have no expiry timer; they're valid until revoked in the Admin Console. |
+| What storage backends does the API Server support? | Disk/shared folder (EFS/Azure Files), AWS S3, or Database (MSSQL/Oracle/PostgreSQL/MySQL) — configured via `filestorage_repository_impl`. |
 | Does the API Server require its own database? | Yes. Always required for tokens, PS config, and file metadata. Does not need to be large. |
 | What happens to files after protection download? | Protected files are auto-deleted from API Server after download. Unprotected uploads are auto-deleted after a configurable timeout. |
 | What is Seclore Online Integration? | Allows users to open protected files in-browser or natively (CFAD) without downloading. Seclore Online Server decrypts the file after auth, then streams the rendered content over HTTPS to a secure browser container. |
@@ -1554,7 +1629,9 @@ watermark, response cases, testing, troubleshooting) is in `references/policy-fe
 
 DRM API Server integration (architecture, API vs SDK decision, all REST endpoints, file lifecycle,
 authentication, storage options, deployment, error codes, best practices, and sample code) is in
-`references/api-server-guide.md`.
+`references/api-server-guide.md`. Getting started with the DRM API Server (deployment
+prerequisites, key configuration properties, the Admin Console API key walkthrough, testing, and
+who to contact) is in `references/api-server-config-guide.md`.
 
 Seclore Online Integration (use case, security model, iFrame deprecation, communication flows,
 key concepts, all Seclore Online and EA endpoints, proof key validation, access token lifecycle,

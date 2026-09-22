@@ -89,49 +89,121 @@ and integration effort.
 
 ## 5. File Lifecycle and Communication Flow
 
-The standard protection flow is:
+**Verified directly against the DRM API Server 3.5.0.0 offline deployment package** (the
+compiled server JAR, the installation/admin-console/swagger-testing guides, and the bundled
+sanity-test script) — this is the ground truth for the current release, superseding anything
+in this guide sourced only from the public developer portal. See Section 6 for how the two
+sources agree and the handful of places the portal turned out to be wrong.
+
+**There is no login step in the current model.** Generate an API key once from the Admin
+Console and send it as `Authorization: Bearer <api-key>` on every call:
 
 ```
-1. Login           →  POST /auth/login
-                      Returns: accessToken + refreshToken
-
-2. Upload File     →  POST /filestorage/upload  (multipart/form-data)
+1. Upload File     →  POST /filestorage/1.0/upload  (multipart/form-data)
                       Returns: fileStorageId
 
-3. Protect         →  POST /protect/{type}
+2. Protect         →  POST /1.0/protect/{type}
                       Input: fileStorageId + protection params
                       Returns: new fileStorageId (protected file) + secloreFileId
 
-4. Download        →  GET  /filestorage/download/{fileStorageId}
+3. Download        →  GET  /filestorage/1.0/download/{fileStorageId}
                       Returns: the protected (HTML-wrapped) file
 
-5. Delete original →  DELETE /filestorage/1.0/delete/{fileStorageId}
-                      (Delete the unprotected copy uploaded in step 2)
+4. Delete original →  DELETE /filestorage/1.0/{fileStorageId}
+                      (Delete the unprotected copy uploaded in step 1)
 ```
 
 The unprotection flow is symmetrical:
 ```
-1. Login
-2. Upload protected file  →  POST /filestorage/upload
-3. Unprotect              →  POST /unprotect/
+1. Upload protected file  →  POST /filestorage/1.0/upload
+2. Unprotect              →  POST /1.0/unprotect
                               Returns: new fileStorageId (unprotected file)
-4. Download unprotected file
-5. Delete
+3. Download unprotected file
+4. Delete
 ```
 
 **Important behaviour:**
 - Protected files are **automatically deleted** from the API Server after download
 - Unprotected (uploaded) copies are **automatically deleted** after a configurable timeout
-- The `/delete` and `/deleteall` APIs can be used to clean up explicitly
-- Every API call except `/health` requires a valid Bearer token in the `Authorization` header
+- The delete-one and delete-all file storage APIs can be used to clean up explicitly
+- Every API call except `/health`, `/healthcheck`, and `/version` requires a valid `Authorization: Bearer <api-key>` header
 
 ---
 
 ## 6. Authentication
 
-### 6.1 Login
+**Current model: API Key.** Generate a key from the Admin Console (`https://<FQDN>/seclore/drm/admin`)
+for the Application you're integrating, and send it on every request:
 
-**POST** `/seclore/drm/1.0/auth/login`
+```
+Authorization: Bearer <api-key>
+```
+
+`/health`, `/healthcheck`, and `/version` are public and don't require it. Everything else does.
+
+**The JWT login/refresh/invalidate flow (Section 6.4 below) is deprecated but still works.**
+Straight from the source shipped with the 3.5.0.0 offline package:
+- `drm_secrets.properties`: *"DEPRECATED: JWT-based REST API authentication is deprecated in
+  favor of API Key authentication (see the Admin Console API key management endpoints)."*
+- The Swagger Testing Guide: *"The JWT-based Login/Refresh/Invalidate endpoints in the
+  auth-controller section are deprecated and will be removed in a future release — do not use
+  them for new integrations."*
+- The Admin Console Usage Guide FAQ: *"Can JWT and API key authentication be used at the same
+  time? Yes. Both methods work on all the same protected endpoints in this release. An
+  individual API call uses whichever token is present in its Authorization header. Different
+  integrations can use different methods against the same server. Future release will not be
+  supporting JWT."*
+
+So the two mechanisms coexist for now — a Swagger UI "Authorize" field or an `Authorization`
+header will accept either an API key or a legacy JWT access token, auto-detected by the
+server — but only the API key model has a future. Build new integrations on it.
+
+### 6.1 Getting an API key
+
+API keys can **only** be created or revoked through the Admin Console — there is no REST
+endpoint for API key management. The flow:
+1. An admin logs into the Admin Console and creates (or already has) an **Application** —
+   this maps to an Enterprise Application (EA) configured on the Policy Server, and needs the
+   EA ID, EA passphrase, and Policy Server URL.
+2. On that Application, the admin creates an API key with a label (e.g. `ERP Integration`).
+   The full key is shown **once**, at creation time, and can't be retrieved again — it must be
+   copied immediately into a secrets manager or vault.
+3. Give that key to the integrating application; it doesn't expire on a timer, so there's no
+   refresh flow to build. Rotate it periodically by creating a new key, cutting the
+   integration over, then deleting the old one (the old key keeps working during the overlap).
+
+If you don't have Admin Console access yourself, this is the point where you loop in whoever
+runs your DRM API Server deployment — see `references/api-server-config-guide.md` for the
+full walkthrough and who to contact.
+
+### 6.2 Common request headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Authorization` | **Mandatory** (except `/health`, `/healthcheck`, `/version`) | `Bearer <api-key>` |
+| `X-SECLORE-CORRELATION-ID` | Optional | Custom request ID passed through to server logs — use it to correlate a request across your logs and Seclore's for debugging |
+| `Content-Type` | Conditional | `application/json` for JSON bodies; `multipart/form-data` for file upload |
+
+> **Note:** this header's name is confirmed directly from the `AuthController`/`FileStorageController`
+> classes in the shipped server JAR: `X-SECLORE-CORRELATION-ID`. If you've seen a different
+> name (e.g. `X-SECLORE-REQUEST-ID`) in an older integration or sample script, that script is
+> just choosing its own local variable name for a value it sends under this header, or is
+> simply out of date — `X-SECLORE-CORRELATION-ID` is what the server itself defines.
+
+### 6.3 Error response schema
+
+```json
+{
+  "errorCode":    "string",
+  "errorMessage": "string"
+}
+```
+
+### 6.4 Legacy JWT flow (deprecated, still functional in 3.5.0.0)
+
+Kept here for integrations still migrating off it — do not build new integrations against this.
+
+**Login — POST** `/seclore/drm/1.0/auth/login`
 
 Generates an access token and refresh token using the tenant credentials configured in the
 API Server's environment variables.
@@ -153,13 +225,10 @@ API Server's environment variables.
 ```
 
 - `tenantId` and `tenantSecret` are set in the API Server's configuration (environment variables), not in Policy Server
-- The access token defaults to **15-minute expiry** (configurable)
+- The access token defaults to **15-minute expiry** (configurable); the refresh token to 60 minutes
 - Pass the access token as `Authorization: Bearer <accessToken>` on every subsequent call
-- The `x-api-key` header is only required when calling a Seclore-hosted (cloud) instance; it is not needed for a customer-deployed instance
 
-### 6.2 Refresh
-
-**POST** `/seclore/drm/1.0/auth/refresh`
+**Refresh — POST** `/seclore/drm/1.0/auth/refresh`
 
 ```json
 { "refreshToken": "eyJhbGci..." }
@@ -168,9 +237,7 @@ API Server's environment variables.
 Returns a new `accessToken` + `refreshToken`. Use this when the access token expires to avoid
 re-authenticating from scratch.
 
-### 6.3 Invalidate
-
-**POST** `/seclore/drm/1.0/auth/invalidate`
+**Invalidate — POST** `/seclore/drm/1.0/auth/invalidate`
 
 Explicitly invalidates both tokens (logout).
 
@@ -181,22 +248,15 @@ Explicitly invalidates both tokens (logout).
 }
 ```
 
-### 6.4 Common request headers
-
-Every API endpoint accepts these headers:
-
-| Header | Required | Description |
-|--------|----------|-------------|
-| `Authorization` | **Mandatory** (except `/health`, `/version`) | `Bearer <accessToken>` |
-| `X-SECLORE-REQUEST-ID` | Optional | Custom request ID for correlating log entries — useful for debugging in production |
-| `x-api-key` | Mandatory only for Seclore-hosted cloud instances | Provided by your Seclore PoC; not needed for customer-deployed instances |
-
-### 6.5 Token handling best practices
+### 6.5 Token handling best practices (legacy JWT flow only)
 
 - Cache the access token and reuse it across requests until it expires — do not call `/login` before every file operation
 - Implement refresh-on-401: catch `DRM-1013` (token expired), call `/refresh`, retry the original request
 - Store tokens in memory only — do not persist to disk or logs
 - The API Server validates the token signature on every call; a tampered token returns `DRM-1014`
+
+On the API key model, the equivalent practice is: store the key in a secrets manager, not in
+code or logs, and rotate it from the Admin Console per your security policy.
 
 ---
 
@@ -255,7 +315,22 @@ filename = cd.split("filename=")[-1].strip('"') if "filename=" in cd else "prote
 **GET** `/seclore/drm/filestorage/1.0/files`
 
 Returns metadata for **all** files currently stored in the file storage for the logged-in
-tenant. Returns an array of `FileMetadataDTO` objects.
+tenant.
+
+**Response (200)** — array of the same object shape as Upload File / Get File Info:
+```json
+[
+  {
+    "fileStorageId": "string",
+    "fileName": "string",
+    "downloadUrl": "string",
+    "fileType": "string",
+    "fileSize": 0,
+    "secloreFileId": "string | null",
+    "protected": true
+  }
+]
+```
 
 ### 7.4 Get File Info
 
@@ -264,7 +339,7 @@ tenant. Returns an array of `FileMetadataDTO` objects.
 Returns metadata for a **specific** file by its storage ID.
 
 | Parameter     | Type   | Required | Description                        |
-|---------------|--------|----------|------------------------------------|
+|---------------|--------|----------|-------------------------------------|
 | fileStorageId | string | true     | Storage ID of the file to retrieve |
 
 **Response (200)**:
@@ -282,13 +357,18 @@ Returns metadata for a **specific** file by its storage ID.
 
 ### 7.5 Delete File
 
-**DELETE** `/seclore/drm/filestorage/1.0/delete/{fileStorageId}`
+**DELETE** `/seclore/drm/filestorage/1.0/{fileStorageId}`
 
 Deletes a specific file. Use this to clean up the unprotected original after protection is
 confirmed.
 
+> **Path correction, confirmed against the `FileStorageController` class in the server JAR:**
+> earlier versions of this guide used `/seclore/drm/filestorage/1.0/delete/{fileStorageId}` —
+> with a `/delete/` segment. There is no such segment; the mapping is a bare `DELETE` on
+> `/{fileStorageId}` under the `/filestorage/1.0` base path. Update any hardcoded URLs.
+
 | Parameter     | Type   | Required | Description                      |
-|---------------|--------|----------|----------------------------------|
+|---------------|--------|----------|-----------------------------------|
 | fileStorageId | string | true     | Storage ID of the file to delete |
 
 ### 7.6 Delete All Files
@@ -353,27 +433,37 @@ use the same access rules). Simplest integration path.
 Protects the file with access rights defined at protection time. The application specifies
 exactly who can access the file, what rights they have, and any expiry or IP restrictions.
 
-**Parameter reference:**
+**Parameter reference** (field names confirmed against the `ProtectionDetail` and
+`AccessRightDetail` request classes in the server JAR):
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `protectionDetails.accessRightMappings[].entities` | **Mandatory** | Recipient email or group email to grant access to |
-| `protectionDetails.accessRightMappings[].primaryAccessRight` | **Mandatory** | Access permissions list (see table below) |
-| `protectionDetails.accessRightMappings[].offline` | **Mandatory** | Allow offline access to the document |
-| `protectionDetails.accessRightMappings[].redistribute` | **Mandatory** | Allow sharing/forwarding the document |
-| `protectionDetails.accessRightMappings[].lockToFirstMachine` | Optional | Restrict access to the first device on which the file is opened |
-| `protectionDetails.accessRightMappings[].daysSinceProtection` | Optional | Expire access N days after protection date |
-| `protectionDetails.accessRightMappings[].daysSinceFirstAccess` | Optional | Expire access N days after first open |
-| `protectionDetails.accessRightMappings[].ipRangeAccess` | Optional | Block access from specified IP ranges |
-| `protectionDetails.classification` | Optional | Seclore Classification ID string for the document |
-| `protectionDetails.credentialIds` | Optional | Comma-separated policy credential IDs |
-| `protectionDetails.ownerEmailId` | **Mandatory** | Email address of the document owner |
 | `fileStorageId` | **Mandatory** | File Storage ID received from the Upload API |
+| `protectionDetails` | **Mandatory** | Protection configuration object |
+| `protectionDetails.ownerEmailId` | **Mandatory** | Email address of the document owner |
+| `protectionDetails.classificationId` | Optional | Seclore Classification label ID for the document |
+| `protectionDetails.credentialIds` | Optional | Policy credential IDs to associate with the file |
+| `protectionDetails.accessRightMappings` | Optional (schema-level) | List of access right configurations for users/groups — omit only if the file needs no recipients |
+| `accessRightMappings[].entities` | **Mandatory** if the mapping is present | Recipient email(s)/group email(s) to grant access to |
+| `accessRightMappings[].primaryAccessRight` | **Mandatory** if the mapping is present | Access permissions list (see table below) |
+| `accessRightMappings[].offline` | **Mandatory** if the mapping is present | Allow offline access to the document |
+| `accessRightMappings[].redistribute` | **Mandatory** if the mapping is present | Allow sharing/forwarding the document |
+| `accessRightMappings[].lockToFirstMachine` | Optional | Restrict access to the first device on which the file is opened |
+| `accessRightMappings[].daysSinceProtection` | Optional | Expire access N days after protection date |
+| `accessRightMappings[].daysSinceFirstAccess` | Optional | Expire access N days after first open |
+| `accessRightMappings[].ipRangeAccess` | Optional | Block access from specified IP ranges |
+
+> **Correction:** this field was previously documented here as `protectionDetails.classification`
+> (a plain string). The server's `ProtectionDetail` class annotates it `@JsonProperty("classificationId")`
+> — the correct field is `protectionDetails.classificationId`.
 
 ```json
 {
+  "fileStorageId": "abc123",
   "protectionDetails": {
-    "classification": "your-classification-id",
+    "ownerEmailId": "owner@example.com",
+    "classificationId": "your-classification-id",
+    "credentialIds": [],
     "accessRightMappings": [
       {
         "entities": [
@@ -387,11 +477,8 @@ exactly who can access the file, what rights they have, and any expiry or IP res
         "daysSinceFirstAccess": null,
         "ipRangeAccess": []
       }
-    ],
-    "credentialIds": [],
-    "ownerEmailId": "owner@example.com"
-  },
-  "fileStorageId": "abc123"
+    ]
+  }
 }
 ```
 
@@ -416,14 +503,29 @@ Examples: contracts with named parties, reports for specific users.
 **POST** `/seclore/drm/1.0/protect/fileid`
 
 Protects a new file using the Seclore File ID of an already-protected file. The new file
-gets the same policy, same encryption key, and the same Seclore File ID as the original.
+gets the same policy, same encryption key, and the same Seclore File ID as the original —
+this is the API Server's equivalent of the SDK's `PROTECT_WITH_FILE_ID` / the Hot Folder
+"protect with same file external reference ID" dedup behaviour described in
+`references/sdk-guide.md` (reuse the file storage identifier and Seclore copies over the
+original's policy, key, and permissions).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `fileStorageId` | **Mandatory** | New file to protect |
+| `existingProtectedFileId` | **Mandatory** | Seclore file ID to copy permissions from |
 
 ```json
 {
-  "existingProtectedFileId": "SECLORE-FILE-UUID",
-  "fileStorageId": "new-upload-id"
+  "fileStorageId": "new-upload-id",
+  "existingProtectedFileId": "SECLORE-FILE-UUID"
 }
 ```
+
+> **Field name confirmed against the server's `FileIdProtectionDetail` request class:**
+> `@JsonProperty("existingProtectedFileId")`. The public developer portal's field reference
+> table names this `existingSecloreProtectedFileId` (its own cURL example on the same page
+> contradicts that and uses `existingProtectedFileId`) — that table is wrong. The field is
+> `existingProtectedFileId`, full stop.
 
 **When to use:** Multiple downloads of the same source document (e.g., a report generated
 for many users). All copies are treated as identical from a DRM perspective.
@@ -471,9 +573,22 @@ For ARA callback implementation, see `references/policy-federation-api.md`.
 
 ## 9. Unprotect API
 
-**POST** `/seclore/drm/1.0/unprotect/`
+**POST** `/seclore/drm/1.0/unprotect`
 
-Unprotects a Seclore-protected file that belongs to the same tenant (EA).
+There is a single unprotect endpoint — the same one is used for both standard unprotect and
+Unprotect Any File. Which behavior you get depends entirely on how the calling **Application**
+is configured in the Admin Console, not on a different endpoint or request parameter:
+
+| Application configuration | What `/unprotect` can decrypt |
+|---|---|
+| Standard (Advanced Security off, or on without Advanced Privileges) | Only files protected under a Hot Folder owned by this Application's mapped EA |
+| Advanced Security **+ Allow Advanced Privileges** checked in the Admin Console, **and** the "Unprotect any file" privilege also enabled on that EA in Policy Server | **Any** file on that Policy Server, regardless of which EA originally protected it |
+
+This mirrors the Server SDK's Advanced Security + Advanced Privileges model exactly (Mode 4 /
+`references/sdk-guide.md` Section 7) — Unprotect Any File is fully available through the REST
+API, it's just an Application-configuration choice rather than a separate call. See
+`references/api-server-config-guide.md` Section 2 for the Admin Console walkthrough (the "Allow
+Advanced Privileges" checkbox).
 
 ```json
 {
@@ -490,8 +605,6 @@ Unprotects a Seclore-protected file that belongs to the same tenant (EA).
 
 The response contains a **new** `fileStorageId` pointing to the decrypted file. Download
 it using the Download API.
-
-> The API Server can only unprotect files belonging to its configured EA if advanced security is disabled for that EA. To unprotect any file, advanced security should be enabled for EA.
 
 ---
 
@@ -671,7 +784,7 @@ Retrieve policy details by either:
             "entity": { "id": "string", "repcode": 0, "type": 0 },
             "primaryAccessRight": ["string"],
             "offline": 0,
-            "redistribute": 0,
+            "redistibute": 0,
             "LockToFirstMachine": 0,
             "daysSinceProtection": 0,
             "daysSinceFirstAccess": 0,
@@ -683,6 +796,14 @@ Retrieve policy details by either:
   ]
 }
 ```
+
+> **Field-name quirk, confirmed against the `AccessRightResponse` class in the server JAR:**
+> in this specific response (`GET /policy/{identifier}`), the redistribution flag is
+> `@JsonProperty("redistibute")` — spelled without the second "r" — unlike every other
+> endpoint in this guide (Update File Permission, Independent Rights, etc.), which use the
+> correctly-spelled `redistribute`. This is a genuine inconsistency in the server's own JSON
+> mapping, not a typo in this guide. If you're parsing this response into a typed object, use
+> the misspelled key here specifically, or you'll silently get `null`/`undefined`.
 
 Use `credentials[].id` as the `credentialId` when passing policies to `addCredentialIds` /
 `removeCredentialIds` in the Update Permission API.
@@ -696,7 +817,7 @@ tenant. Use this for advanced or non-standard Policy Server operations not cover
 the other protection or permission APIs (e.g. proprietary policy queries, custom
 federation requests).
 
-Requires `Authorization: Bearer <access_token>`
+Requires `Authorization: Bearer <api-key>`
 
 | Field       | Type   | Required | Description                                   |
 |-------------|--------|----------|-----------------------------------------------|
@@ -711,7 +832,7 @@ Requires `Authorization: Bearer <access_token>`
 **Example**:
 ```bash
 curl -X POST https://your-server/seclore/drm/1.0/sendrequest \
-  -H "Authorization: Bearer <access_token>" \
+  -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"requestType": "GetUserDetails", "requestBody": "<xml>...</xml>"}'
 ```
@@ -725,7 +846,48 @@ curl -X POST https://your-server/seclore/drm/1.0/sendrequest \
 
 Apply, update, query, and remove classification labels on files. Labels are configured
 in the Policy Server and control how files are categorised for sensitivity, compliance,
-and visual marking. All endpoints require `Authorization: Bearer <access_token>`.
+and visual marking. All endpoints require `Authorization: Bearer <api-key>`. Classification
+works automatically whenever Advanced Security is enabled for the Application/EA — there's no
+separate feature flag for it; if Advanced Security isn't enabled, these calls won't work.
+
+> **Response schema correction, confirmed against the server's `FileClassificationResponse`
+> and `ClassificationLabelInfo` response classes:** an earlier version of this guide documented
+> Classify/Reclassify/Declassify as returning a flat `{ fileStorageId, labelId, labelName }`
+> shape. That's wrong. All three actually return `{ id, currentLabel, oldLabel }`, where `id`
+> is `@JsonProperty("id")` on the classification ID field and `currentLabel`/`oldLabel` are
+> each the **full label object** shown below. Update any parsing code built against the old
+> flat shape.
+
+The full label object shape returned by `currentLabel` / `oldLabel` (Classify, Reclassify,
+Declassify) and by `classificationInfo` (Get File Classification) and by each entry in
+`labels[]` (Get All Labels) is:
+
+```json
+{
+  "id":               "string",
+  "parentId":         "string",
+  "sensitivity":      0,
+  "name":             "string",
+  "description":      "string",
+  "tooltip":           "string",
+  "color":            "string",
+  "visualMarking": {
+    "email": {
+      "headerText": "string", "footerText": "string",
+      "fontColor": "string", "fontSize": 0, "textAlignment": "string"
+    },
+    "document": {
+      "headerText": "string", "footerText": "string",
+      "fontColor": "string", "fontSize": 0, "textAlignment": "string"
+    }
+  },
+  "sublabels":        ["string"],
+  "status":           "string",
+  "creationTime":     "string",
+  "lastModifiedTime": "string",
+  "createdByUserId":  "string"
+}
+```
 
 ---
 
@@ -739,17 +901,21 @@ Applies a classification label to a file using a `labelId` from the Policy Serve
 |-------------------|---------|----------|----------------------------------------------|
 | fileStorageId     | string  | true     | File to classify                             |
 | labelId           | string  | true     | Classification label ID from Policy Server   |
-| forceLabelRefresh | boolean | false    | Force refresh of label cache before applying |
+| forceLabelRefresh | boolean | false    | Force refresh of the label cache before applying |
 
-**Response (200)**:
+**Response (200)** — returns the applied label and the previous label (see full shape above):
 ```json
-{ "fileStorageId": "string", "labelId": "string", "labelName": "string" }
+{
+  "id": "string",
+  "currentLabel": { "...": "full label object" },
+  "oldLabel":     { "...": "full label object" }
+}
 ```
 
 **Example**:
 ```bash
 curl -X POST https://your-server/seclore/drm/1.0/classification/classify \
-  -H "Authorization: Bearer <access_token>" \
+  -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"fileStorageId": "<id>", "labelId": "<label_id>"}'
 ```
@@ -760,23 +926,16 @@ curl -X POST https://your-server/seclore/drm/1.0/classification/classify \
 
 **POST** `/seclore/drm/1.0/classification/reclassify`
 
-Updates the label on an already-classified file. Response includes both `currentLabel`
-and `oldLabel`.
+Updates the label on an already-classified file.
 
 | Field             | Type    | Required | Description                  |
-|-------------------|---------|----------|------------------------------|
+|-------------------|---------|----------|-------------------------------|
 | fileStorageId     | string  | true     | File to reclassify           |
 | labelId           | string  | true     | New classification label ID  |
 | forceLabelRefresh | boolean | false    | Force refresh of label cache |
 
-**Response (200)**:
-```json
-{
-  "fileStorageId": "string",
-  "currentLabel": { "labelId": "string", "labelName": "string" },
-  "oldLabel":     { "labelId": "string", "labelName": "string" }
-}
-```
+**Response (200)** — same `{ id, currentLabel, oldLabel }` shape as Classify (Section 12.1),
+with `currentLabel` holding the new label and `oldLabel` the previous one.
 
 ---
 
@@ -785,17 +944,15 @@ and `oldLabel`.
 **POST** `/seclore/drm/1.0/classification/declassify`
 
 Removes the classification label from a file. DRM protection is unaffected — only the
-label is removed. Returns `labelId: null` and `labelName: null` on success.
+label is removed.
 
 | Field             | Type    | Required | Description                  |
-|-------------------|---------|----------|------------------------------|
+|-------------------|---------|----------|-------------------------------|
 | fileStorageId     | string  | true     | File to declassify           |
 | forceLabelRefresh | boolean | false    | Force refresh of label cache |
 
-**Response (200)**:
-```json
-{ "fileStorageId": "string", "labelId": null, "labelName": null }
-```
+**Response (200)** — same `{ id, currentLabel, oldLabel }` shape as Classify (Section 12.1),
+returning the removed label and the previous label state.
 
 ---
 
@@ -808,8 +965,13 @@ sensitivity levels, colours, and visual markings.
 
 | Field             | Type    | Required | Description                      |
 |-------------------|---------|----------|----------------------------------|
-| fileStorageId     | string  | true     | Context file storage ID          |
+| fileStorageId     | string  | **true** | File providing the classification context for this request |
 | forceLabelRefresh | boolean | false    | Force refresh of the label cache |
+
+> **Confirmed against the server's `GetClassificationLabelsRequest` class:** `fileStorageId`
+> is annotated `@NotNull` there ("fileStorageId is required."), so it **is** mandatory. An
+> earlier pass at this guide — sourced only from the public developer portal — said this field
+> wasn't required at all; that portal page is wrong. The compiled server code is authoritative.
 
 Use `forceLabelRefresh: true` when label config changes recently; avoid in
 high-throughput paths due to cache rebuild cost.
@@ -824,57 +986,111 @@ Returns the current classification label on a specific file.
 
 **Response (200)**:
 ```json
-{ "classified": true, "classificationInfo": { ... } }
+{
+  "classified": true,
+  "classificationInfo": { "...": "full label object, see Section 12 intro" }
+}
 ```
 
 ---
 
 ### 12.6 Classification Workflow Notes
 
-- To classify during protection, pass `"classification": "<labelId>"` (plain string) inside
-  `protectionDetails` of `/protect/independent`. Note: the *response* from Get File Permissions
-  returns classification as `{ "id": "string" }` — this is the Policy Server's XML structure
-  reflected in the response, distinct from the flat string used in the request.
+- To classify during protection, pass `protectionDetails.classificationId` (plain string,
+  the label ID) inside the request body of `/protect/independent` — see Section 8.2. This
+  field was previously documented as `protectionDetails.classification`; the server's
+  `ProtectionDetail` class annotates it `@JsonProperty("classificationId")`.
+- The *response* from Get File Permissions returns classification as a nested
+  `{ "id": "string" }` object under the `classification` key (confirmed against
+  `FilePermissionResponse`/`ClassificationResponse`, Section 10.1), while the
+  classify/reclassify/declassify/get endpoints in this section return the full label object
+  under `currentLabel`/`classificationInfo` — different shapes for different purposes.
 - Declassification removes only the label — DRM rights remain intact.
 - `forceLabelRefresh` bypasses the server-side label cache; use sparingly.
 - Labels (`labelId`) must be pre-configured in the Policy Server before calling these APIs.
+- Classification requires Advanced Security to be enabled on the Application/EA — it isn't a
+  separate toggle.
 
 ---
 
 ## 13. Utility APIs (App Info)
 
+There are **three** distinct health-related endpoints — confirmed against `AppInfoController`
+in the server JAR, and the third (`/healthcheck`) isn't on the public developer portal at all:
+
 ### 13.1 Health Check
 
 **GET** `/seclore/drm/health`
 
-Returns the health status of all three components the API Server depends on.
+Returns overall health status, including the Policy Server. Per the endpoint's own Javadoc in
+the server code: *"depends on the policy server; use /healthcheck instead"* for a check that
+doesn't depend on an external system. No authentication required.
 
 ```json
 {
   "status": "UP",
   "components": {
-    "databaseFileStorage": "UP",
-    "applicationDatabase": "UP",
-    "policyServer": "UP"
+    "policyServer": "UP",
+    "<fileStorageComponent>": "UP",
+    "applicationDatabase": "UP"
   }
 }
 ```
 
-`status` is `UP` only when all three components are `UP`. Use this endpoint for readiness
-probes in Kubernetes or load balancer health checks.
+> **Correction:** an earlier version of this guide showed the file-storage component key as a
+> fixed `"databaseFileStorage"`. It isn't fixed — the key name comes from whichever storage
+> backend is configured via `filestorage_repository_impl` (Section 16.3 / the config guide):
+> `diskFileStorage` (disk/NAS, the on-prem default), `databaseFileStorage` (DB-backed storage),
+> or `s3FileStorage` (S3). Only one of the three appears, matching your deployment's actual
+> configuration — don't assume any single name.
 
-### 13.2 Version
+`status` is `DOWN` (HTTP 503) if any component is down. Use this endpoint for a full readiness
+probe when Policy Server reachability matters to you.
+
+### 13.2 Core Health Check
+
+**GET** `/seclore/drm/healthcheck`
+
+Checks only the DRM API Server's own components (file storage, application database) — **not**
+the Policy Server. No authentication required. Same response shape as 13.1, minus the
+`policyServer` entry. Use this when you want to know the API Server process itself is up
+without that check's result depending on an external Policy Server being reachable.
+
+### 13.3 Application Health
+
+**GET** `/seclore/drm/application/health`
+
+Health status scoped to the specific Application/tenant identified by your API key, rather
+than the DRM API Server as a whole. Requires `Authorization: Bearer <api-key>`.
+
+```json
+{
+  "status": "UP",
+  "components": {
+    "policyServer": "UP",
+    "<fileStorageComponent>": "UP",
+    "applicationDatabase": "UP"
+  }
+}
+```
+
+Responses: `200` (UP), `503` (DOWN), `404` (application not found for the given API key), `500`
+(internal server error). Use this when you specifically need to know whether *your* tenant's
+connectivity is healthy, as distinct from the shared service overall (13.1/13.2).
+
+### 13.4 Version
 
 **GET** `/seclore/drm/version`
 
-Returns the current version string of the DRM API Service. Useful for verifying which build
-is deployed.
+Returns the current version string of the DRM API Service as plain text (not JSON). No
+authentication required. Useful for verifying which build is deployed — e.g. to confirm you're
+actually on 3.5.0.0 before relying on API-key auth.
 
 ---
 
-## 13. File Transfer Concepts
+## 14. File Transfer Concepts
 
-### 13.1 Multipart Upload
+### 14.1 Multipart Upload
 
 File upload uses `multipart/form-data` — the standard HTTP mechanism for binary file transfer.
 The file is sent as a binary part of the request body, not as a base64 string.
@@ -905,7 +1121,7 @@ Request request = new Request.Builder()
     .build();
 ```
 
-### 13.2 Binary vs Stream
+### 14.2 Binary vs Stream
 
 The Seclore DRM API Server does **not** support streaming input — the file must be
 completely uploaded before protection starts. This is a two-step process:
@@ -917,7 +1133,7 @@ This differs from the Server SDK, which requires the file on the local disk of t
 running the SDK. With the API Server, the file is transferred over HTTP and held in the
 configured storage backend (disk, S3, or database) during processing.
 
-### 13.3 Download after protection
+### 14.3 Download after protection
 
 The Download API returns the file as a binary response stream. The integrating application
 reads the response body directly and writes it to disk or forwards it to the end user.
@@ -933,7 +1149,7 @@ try (InputStream in = response.body();
 }
 ```
 
-### 13.4 File size considerations
+### 14.4 File size considerations
 
 Large files increase upload latency. For high-throughput environments:
 - Use storage backends co-located with the API Server (S3 in same AWS region, or local disk)
@@ -942,7 +1158,7 @@ Large files increase upload latency. For high-throughput environments:
 
 ---
 
-## 14. Storage Options
+## 15. Storage Options
 
 The API Server supports three storage backends for the files it handles:
 
@@ -958,16 +1174,24 @@ large — any supported RDBMS works.
 
 ---
 
-## 15. Deployment and Setup
+## 16. Deployment and Setup
 
-### 15.1 Where to deploy
+### 16.1 Where to deploy
 
 | Option | Description |
 |--------|-------------|
-| **Seclore-managed (AWS)** | Seclore hosts and manages the API Server on AWS. The integrating application calls it over the internet. Requires `x-api-key` header on every call. |
+| **Seclore-managed (AWS)** | Seclore hosts and manages the API Server on AWS. The integrating application calls it over the internet. Requires an `x-api-key` header on every call. |
 | **Customer-deployed (On-prem or cloud)** | Customer deploys the API Server in their own environment — on-premises servers, AWS, Azure, or any cloud. No `x-api-key` required. Recommended for data-sensitive environments. |
 
-### 15.2 Why customer-side deployment is recommended
+> **Don't confuse this with the `Authorization: Bearer <api-key>` header from Section 6.**
+> `x-api-key` here is a separate, deployment-level header that only applies if Seclore is
+> hosting your API Server instance on AWS. The 3.5.0.0 offline package (which this guide is
+> otherwise verified against) is the **customer-deployed** artifact and doesn't cover the
+> Seclore-managed path, so this row is carried over from the public developer portal, not
+> independently reverified this pass. The `Authorization` header is the per-application
+> authentication credential and is required regardless of deployment model.
+
+### 16.2 Why customer-side deployment is recommended
 
 The API Server handles **raw, unencrypted files** during the upload → protect → download
 cycle. Files are in plaintext on the API Server storage between upload and protection.
@@ -976,22 +1200,24 @@ Deploying in the customer environment ensures:
 - Full control over storage, logging, and network access
 - Compliance with data residency requirements
 
-### 15.3 Required configuration
+### 16.3 Required configuration
 
 Before the first API call, the API Server must be configured with:
-- **Seclore Policy Server** URL, EA ID, and EA Passphrase
-- **Tenant ID and Tenant Secret** (used for the Login API — distinct from EA credentials)
-- **Database** connection string (any supported RDBMS)
-- **File Storage** type and path/connection (disk path, S3 bucket, or DB)
-- **Token expiry** (default 15 minutes; configurable)
+- **Seclore Policy Server** URL, EA ID, and EA Passphrase — entered per Application, via the Admin Console (Section 6.1) rather than a single server-wide value
+- **Database** connection string (any supported RDBMS) — for the required Application Database
+- **File Storage** backend (`filestorage_repository_impl`): disk/NAS (`DiskFileStorage`, the on-prem default), S3 (`S3FileStorage`), or database (`DBFileStorage`) — this choice also determines which key name shows up in the health check response (Section 13.1)
+- **Admin Console credentials** (`DRM_ADMIN_PASSWORD`, username fixed as `drmadmin`) and `DRM_INTERNAL_SECRET_KEY` — new as of 3.5.0.0, for the Admin Console itself
+- **Tenant ID and Tenant Secret** — only needed if you're still using the deprecated JWT Login flow (Section 6.4); not required for the API Key model
 - **File cleanup timeout** for unprotected uploads
 
-Configuration is typically done via environment variables or a config file supplied at startup.
-Contact your Seclore implementation team for the full deployment guide.
+Configuration is typically done via properties files supplied at deployment time — this is set
+up by whoever administers the server, not something a developer configures via the API. For what
+needs to exist before you can call the API, the Admin Console API key walkthrough, and who to
+contact for each part, see `references/api-server-config-guide.md`.
 
 ---
 
-## 16. Error Codes
+## 17. Error Codes
 
 ### Generic
 
@@ -1010,12 +1236,16 @@ Contact your Seclore implementation team for the full deployment guide.
 
 | Code | Description | Fix |
 |------|-------------|-----|
-| DRM-1010 | Unauthorised request | Token missing or invalid |
-| DRM-1011 | Access token not sent | Add `Authorization: Bearer <token>` header |
-| DRM-1012 | Error generating tokens | Check tenant credentials in API Server config |
-| DRM-1013 | Token expired | Call `/auth/refresh` to get a new token |
-| DRM-1014 | JWT signature mismatch | Token tampered or from wrong issuer; re-login |
-| DRM-1015 | Invalid refresh token | Refresh token expired or invalid; re-login |
+| DRM-1010 | Unauthorised request | API key (or, on the legacy flow, token) missing or invalid |
+| DRM-1011 | Access token not sent | Add `Authorization: Bearer <api-key>` header |
+| DRM-1012 | Error generating tokens | Legacy JWT flow only — check tenant credentials in API Server config |
+| DRM-1013 | Token expired | Legacy JWT flow only — call `/auth/refresh` to get a new token; not applicable to the API key model, which doesn't expire on a timer |
+| DRM-1014 | JWT signature mismatch | Legacy JWT flow only — token tampered or from wrong issuer; re-login |
+| DRM-1015 | Invalid refresh token | Legacy JWT flow only — refresh token expired or invalid; re-login |
+
+> DRM-1012/1013/1014/1015 apply to the deprecated JWT login flow (Section 6.4). On the current
+> API key model, an invalid or revoked key surfaces as DRM-1010/1011 (401) — there's no
+> separate "expired" code because API keys don't expire on a timer, only on manual revocation.
 
 ### Seclore SDK (returned when API Server calls PS on your behalf)
 
@@ -1038,29 +1268,35 @@ Contact your Seclore implementation team for the full deployment guide.
 
 ---
 
-## 17. Best Practices
+## 18. Best Practices
 
-### 17.1 Security
+### 18.1 Security
 
-**Token management:**
-- Implement token refresh on 401 / DRM-1013; do not re-login from scratch every time
-- Never log access or refresh tokens
-- Use short token expiry (15 minutes is the default and is appropriate)
-- If the API Server is customer-deployed, restrict the Login endpoint to your application's
-  IP range at the network/firewall level
+**API key management (current model):**
+- Store the API key in a secrets manager, not in code, config files committed to source control, or logs
+- Generate a distinct API key per integrating application/team — don't share one key across unrelated integrations (the Admin Console's key label is designed for this: "CI Pipeline - Production", "ERP Integration", etc.)
+- Rotate without downtime: create the new key, cut the integration over, verify it, then delete the old one — the old key keeps working until you explicitly delete it
+- Transmit it only over HTTPS; never embed it in client-side code
+- A deleted key stops working immediately on the node it was deleted from; on other nodes in a multi-instance deployment, within about a minute
 
 **File handling:**
 - Delete the unprotected upload immediately after protection is confirmed:
-  `DELETE /filestorage/delete/{originalFileStorageId}`
+  `DELETE /seclore/drm/filestorage/1.0/{originalFileStorageId}`
 - Do not store `fileStorageId` values beyond the immediate request/response lifecycle — they are transient handles
-- If using Seclore-hosted (cloud) API Server, transmit the `x-api-key` only over HTTPS; never embed it in client-side code
 
 **Network:**
 - Deploy the API Server in the DMZ / Integration Zone, not in the public internet segment
 - Restrict API Server → Policy Server traffic to port 443 from the API Server's IP only
 - Use TLS 1.2 or higher for all connections
 
-### 17.2 URL Construction
+**If you're still on the deprecated JWT flow (Section 6.4):**
+- Implement token refresh on 401 / DRM-1013; do not re-login from scratch every time
+- Never log access or refresh tokens
+- Restrict the Login endpoint to your application's IP range at the network/firewall level
+- Plan your migration to the API key model — JWT and API key both work today, but Seclore has
+  stated a future release will not support JWT
+
+### 18.2 URL Construction
 
 A common integration bug is duplicating the base path. If `base_url` already contains
 `/seclore/drm/`, appending `seclore/drm/1.0/protect/hf` produces a doubled path that
@@ -1085,9 +1321,9 @@ protect_url = f"{BASE_URL}1.0/protect/hf"
 Check every endpoint in your integration for the same duplication — upload, protect,
 download, and delete calls are all equally susceptible.
 
-### 17.3 Performance
+### 18.3 Performance
 
-**Token caching:**
+**Token caching (legacy JWT flow only — not applicable to the API key model):**
 - Cache the access token in memory and reuse it for its full 15-minute lifespan
 - A single token can handle many concurrent file operations — do not create one per file
 
@@ -1109,41 +1345,38 @@ download, and delete calls are all equally susceptible.
 
 ---
 
-## 18. Sample Integration Code
+## 19. Sample Integration Code
 
-### 18.1 Complete flow — curl
+### 19.1 Complete flow — curl
 
 ```bash
-# Step 1: Login
-TOKEN=$(curl -s -X POST "https://api-server/seclore/drm/1.0/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{"tenantId":"my-tenant","tenantSecret":"my-secret"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+# API key is generated once from the Admin Console — no login call needed.
+API_KEY="your-api-key"
 
-# Step 2: Upload
+# Step 1: Upload
 STORAGE_ID=$(curl -s -X POST "https://api-server/seclore/drm/filestorage/1.0/upload" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $API_KEY" \
   -F "file=@document.docx" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['fileStorageId'])")
 
-# Step 3: Protect (Hot Folder)
+# Step 2: Protect (Hot Folder)
 PROTECTED_ID=$(curl -s -X POST "https://api-server/seclore/drm/1.0/protect/hf" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"hotfolderId\":\"12345\",\"fileStorageId\":\"$STORAGE_ID\"}" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['fileStorageId'])")
 
-# Step 4: Download protected file
+# Step 3: Download protected file
 curl -s -X GET "https://api-server/seclore/drm/filestorage/1.0/download/$PROTECTED_ID" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $API_KEY" \
   -o document-protected.html
 
-# Step 5: Delete original upload
-curl -s -X DELETE "https://api-server/seclore/drm/filestorage/1.0/delete/$STORAGE_ID" \
-  -H "Authorization: Bearer $TOKEN"
+# Step 4: Delete original upload
+curl -s -X DELETE "https://api-server/seclore/drm/filestorage/1.0/$STORAGE_ID" \
+  -H "Authorization: Bearer $API_KEY"
 ```
 
-### 18.2 Java — full protect cycle (OkHttp)
+### 19.2 Java — full protect cycle (OkHttp)
 
 ```java
 import okhttp3.*;
@@ -1157,27 +1390,14 @@ public class SecloreApiClient {
     private static final OkHttpClient client = new OkHttpClient();
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    private String accessToken;
-    private String refreshToken;
+    // API key generated once from the Admin Console — no login/refresh flow needed.
+    private final String apiKey;
 
-    // --- 1. Login ---
-    public void login(String tenantId, String tenantSecret) throws IOException {
-        String body = mapper.writeValueAsString(Map.of(
-            "tenantId", tenantId,
-            "tenantSecret", tenantSecret
-        ));
-        Request req = new Request.Builder()
-            .url(BASE_URL + "/seclore/drm/1.0/auth/login")
-            .post(RequestBody.create(MediaType.parse("application/json"), body))
-            .build();
-        try (Response resp = client.newCall(req).execute()) {
-            Map<?,?> result = mapper.readValue(resp.body().string(), Map.class);
-            this.accessToken  = (String) result.get("accessToken");
-            this.refreshToken = (String) result.get("refreshToken");
-        }
+    public SecloreApiClient(String apiKey) {
+        this.apiKey = apiKey;
     }
 
-    // --- 2. Upload file ---
+    // --- 1. Upload file ---
     public String uploadFile(File file) throws IOException {
         RequestBody multipart = new MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -1186,7 +1406,7 @@ public class SecloreApiClient {
             .build();
         Request req = new Request.Builder()
             .url(BASE_URL + "/seclore/drm/filestorage/1.0/upload")
-            .addHeader("Authorization", "Bearer " + accessToken)
+            .addHeader("Authorization", "Bearer " + apiKey)
             .post(multipart)
             .build();
         try (Response resp = client.newCall(req).execute()) {
@@ -1195,7 +1415,7 @@ public class SecloreApiClient {
         }
     }
 
-    // --- 3. Protect with Hot Folder ---
+    // --- 2. Protect with Hot Folder ---
     public String protectHotFolder(String fileStorageId, String hotFolderId) throws IOException {
         String body = mapper.writeValueAsString(Map.of(
             "hotfolderId", hotFolderId,
@@ -1203,7 +1423,7 @@ public class SecloreApiClient {
         ));
         Request req = new Request.Builder()
             .url(BASE_URL + "/seclore/drm/1.0/protect/hf")
-            .addHeader("Authorization", "Bearer " + accessToken)
+            .addHeader("Authorization", "Bearer " + apiKey)
             .post(RequestBody.create(MediaType.parse("application/json"), body))
             .build();
         try (Response resp = client.newCall(req).execute()) {
@@ -1212,11 +1432,11 @@ public class SecloreApiClient {
         }
     }
 
-    // --- 4. Download to file ---
+    // --- 3. Download to file ---
     public void download(String fileStorageId, File destination) throws IOException {
         Request req = new Request.Builder()
             .url(BASE_URL + "/seclore/drm/filestorage/1.0/download/" + fileStorageId)
-            .addHeader("Authorization", "Bearer " + accessToken)
+            .addHeader("Authorization", "Bearer " + apiKey)
             .get()
             .build();
         try (Response resp = client.newCall(req).execute();
@@ -1226,11 +1446,11 @@ public class SecloreApiClient {
         }
     }
 
-    // --- 5. Delete file ---
+    // --- 4. Delete file ---
     public void deleteFile(String fileStorageId) throws IOException {
         Request req = new Request.Builder()
-            .url(BASE_URL + "/seclore/drm/filestorage/1.0/delete/" + fileStorageId)
-            .addHeader("Authorization", "Bearer " + accessToken)
+            .url(BASE_URL + "/seclore/drm/filestorage/1.0/" + fileStorageId)
+            .addHeader("Authorization", "Bearer " + apiKey)
             .delete()
             .build();
         client.newCall(req).execute().close();
@@ -1252,7 +1472,7 @@ public class SecloreApiClient {
 }
 ```
 
-### 18.3 Independent Rights protect example (Java body only)
+### 19.3 Independent Rights protect example (Java body only)
 
 ```java
 Map<String, Object> entity = Map.of("emailId", "alice@example.com", "type", "user");
@@ -1273,7 +1493,7 @@ Map<String, Object> body = Map.of(
 // POST body to /seclore/drm/1.0/protect/independent
 ```
 
-### 18.4 External Reference (Policy Federation) protect example (Java body only)
+### 19.4 External Reference (Policy Federation) protect example (Java body only)
 
 ```java
 Map<String, Object> body = Map.of(
@@ -1292,25 +1512,42 @@ Map<String, Object> body = Map.of(
 
 ---
 
-## 19. API Endpoint Summary
+## 20. API Endpoint Summary
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/seclore/drm/version` | API Server version |
-| GET | `/seclore/drm/health` | Health status (PS, DB, storage) |
-| POST | `/seclore/drm/1.0/auth/login` | Get access + refresh tokens |
-| POST | `/seclore/drm/1.0/auth/refresh` | Refresh expired access token |
-| POST | `/seclore/drm/1.0/auth/invalidate` | Invalidate tokens (logout) |
-| POST | `/seclore/drm/filestorage/1.0/upload` | Upload file for protection/unprotection |
-| GET | `/seclore/drm/filestorage/1.0/download/{id}` | Download file by storage ID |
-| GET | `/seclore/drm/filestorage/1.0/files` | List all stored files |
-| DELETE | `/seclore/drm/filestorage/1.0/delete/{id}` | Delete specific file |
-| DELETE | `/seclore/drm/filestorage/1.0/` | Delete all files |
-| POST | `/seclore/drm/1.0/protect/hf` | Protect with Hot Folder |
-| POST | `/seclore/drm/1.0/protect/independent` | Protect with Independent Rights |
-| POST | `/seclore/drm/1.0/protect/fileid` | Protect using existing Seclore File ID |
-| POST | `/seclore/drm/1.0/protect/externalref` | Protect with External Reference (Policy Federation) |
-| POST | `/seclore/drm/1.0/unprotect/` | Unprotect a file |
-| GET | `/seclore/drm/1.0/filepermission/{id}` | Get file permissions |
-| POST | `/seclore/drm/1.0/updatefilepermission` | Add/update/remove permissions |
-| GET | `/seclore/drm/1.0/policy/{identifier}` | Get policy details by user email or policy ID |
+Routes confirmed directly against the `@RequestMapping`/`@GetMapping`/`@PostMapping`/`@DeleteMapping`
+annotations in the server JAR's controller classes (3.5.0.0).
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/seclore/drm/version` | None | API Server version (plain text) |
+| GET | `/seclore/drm/health` | None | Health status of the service (PS, file storage, app DB) |
+| GET | `/seclore/drm/healthcheck` | None | Core health status — API Server's own components only, not PS |
+| GET | `/seclore/drm/application/health` | API key | Health status scoped to your application/tenant |
+| POST | `/seclore/drm/1.0/auth/login` | — | **Deprecated.** Get access + refresh tokens (legacy JWT flow) |
+| POST | `/seclore/drm/1.0/auth/refresh` | — | **Deprecated.** Refresh expired access token |
+| POST | `/seclore/drm/1.0/auth/invalidate` | — | **Deprecated.** Invalidate tokens (logout) |
+| POST | `/seclore/drm/filestorage/1.0/upload` | API key | Upload file for protection/unprotection |
+| GET | `/seclore/drm/filestorage/1.0/download/{id}` | API key | Download file by storage ID |
+| GET | `/seclore/drm/filestorage/1.0/files` | API key | List all stored files |
+| GET | `/seclore/drm/filestorage/1.0/file/{id}` | API key | Get metadata for a specific stored file |
+| DELETE | `/seclore/drm/filestorage/1.0/{id}` | API key | Delete specific file |
+| DELETE | `/seclore/drm/filestorage/1.0` | API key | Delete all files |
+| POST | `/seclore/drm/1.0/protect/hf` | API key | Protect with Hot Folder |
+| POST | `/seclore/drm/1.0/protect/independent` | API key | Protect with Independent Rights |
+| POST | `/seclore/drm/1.0/protect/fileid` | API key | Protect using existing Seclore File ID |
+| POST | `/seclore/drm/1.0/protect/externalref` | API key | Protect with External Reference (Policy Federation) |
+| POST | `/seclore/drm/1.0/unprotect` | API key | Unprotect a file |
+| POST | `/seclore/drm/1.0/updatefilepermission` | API key | Add/update/remove permissions |
+| GET | `/seclore/drm/1.0/policy/{identifier}` | API key | Get policy details by user email or policy ID |
+| GET | `/seclore/drm/1.0/filepermission/{id}` | API key | Get file permissions |
+| POST | `/seclore/drm/1.0/sendrequest` | API key | Send a custom XML request to Policy Server |
+| POST | `/seclore/drm/1.0/classification/classify` | API key | Apply a classification label |
+| POST | `/seclore/drm/1.0/classification/reclassify` | API key | Change a file's classification label |
+| POST | `/seclore/drm/1.0/classification/declassify` | API key | Remove a file's classification label |
+| GET | `/seclore/drm/1.0/classification/labels` | API key | List all classification labels (requires `fileStorageId`) |
+| GET | `/seclore/drm/1.0/classification/{id}` | API key | Get a file's current classification |
+
+> The three deprecated auth endpoints use tenant credentials, not an API key, and Seclore has
+> stated a future release will not support them — see Section 6.4. API keys themselves can
+> only be created/managed through the Admin Console, never via a REST call — see Section 6.1
+> and `references/api-server-config-guide.md`.

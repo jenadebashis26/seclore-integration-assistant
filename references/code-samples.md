@@ -225,6 +225,11 @@ Do not include concept explanations, "Next Steps" sections, or marketing copy in
 > Root element is `<fs-helper-ps-config>`. PS details go in `<ps-details>` — not `<Policy Server-details>`.
 > Set `<allow-advanced-privileges>true</allow-advanced-privileges>` only when using Unprotect Any File (Advanced EA).
 > The `<server>` value is the hostname only — do not include `https://` or `http://`.
+> `<port>` is required — don't leave it blank or drop it when editing an existing config (e.g.
+> after the Policy Server URL changes). A missing/blank `<port>` doesn't fail at
+> `initializeHelper()` (which never contacts Policy Server); it surfaces later, misleadingly, as
+> `FSHelperException: FSHelper session with the given identifier does not exists` at
+> `getHelper()` — see `references/sdk-guide.md` Section 3.
 
 ---
 

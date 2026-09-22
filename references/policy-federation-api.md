@@ -426,6 +426,13 @@ to avoid unexpected behaviour.**
 
 **PS action:** Opens the file with the returned rights.
 
+> **If you include `<ara-owner-details>`, echo back the same `rep-code`/`ext-id`/`email-id`/`name`
+> PS sent you in the request** rather than substituting a fixed or placeholder value — unless
+> your application is deliberately reassigning ownership and can supply a `rep-code` that maps to
+> a real, adaptor-bound repository on the calling Policy Server. A mismatched or placeholder
+> `rep-code` that PS can't resolve to an adaptor surfaces as a server-side error PS can't recover
+> from — see Troubleshooting below.
+
 ---
 
 ### Response — User has no access (Case 2)
@@ -539,6 +546,15 @@ PS calls this to retrieve file metadata from your application.
 and `<ara-classification-details>` values received in the request. You only need to return
 different values if your application tracks file ownership or classification changes over time
 and wants PS to reflect those updates.
+
+**Recommendation:** unless the integrating application intends to actively change file ownership
+or classification at this point, echo back the exact same `rep-code`, `ext-id`, `email-id`, and
+`name` (or classification) it received in the request, rather than substituting a fixed or
+placeholder value. Only override these fields when the application is deliberately reassigning
+ownership and can supply a `rep-code` that maps to a real, adaptor-bound repository on the
+calling Policy Server. Substituting a fixed/placeholder `rep-code` PS can't resolve is a common
+cause of the `-240011` SDK-side error during Protect with External Reference or Protect with
+File ID — see Troubleshooting below.
 
 ```xml
 <ara-response-get-file-information type="3">
@@ -704,6 +720,40 @@ flow terminates.
     <status>1</status>                      <!-- always 1 for successful processing -->
 </ara-response-header>
 ```
+
+---
+
+### SDK throws `WSClientException` — `Cannot invoke "...Repository.getAdapter()" because "<local10>" is null` (-240,011) during Protect with External Reference or Protect with File ID
+
+**Symptom:** Protecting a file via `PROTECT_WITH_HF_EXT_REF` or `PROTECT_WITH_FILE_ID`, on an EA
+configured for Full Policy Federation, fails on the SDK side with:
+
+```
+com.seclore.fs.ws.client.exception.WSClientException: Response contains error 'Unexpected error -
+Cannot invoke "com.seclore.filesecure.ps.core.Repository.getAdapter()" because "<local10>" is
+null.(-240,011)'.
+```
+
+**Cause:** During this flow, PS calls back to your ARA's `getaccessright` or `getfileinformation`
+endpoint, and something in your response — an incorrect `rep-code`, owner email address, or
+classification ID — doesn't resolve to anything PS can validate. Specifically, if your response's
+`<ara-owner-details>` doesn't echo back the same `rep-code`/`ext-id`/`email-id` PS sent — e.g. it
+returns a fixed placeholder value instead — that mismatched `rep-code` is what PS can't resolve to
+an adaptor. This is the same generic uncaught-NPE pattern behind `-240011` elsewhere in this skill
+(Configure Advanced Security, List Policies by User) — Policy Server doesn't fail cleanly on this
+particular bad input, it throws an unhandled exception instead. The exact error is logged on the
+Policy Server side; the SDK only surfaces the generic `WSClientException` shown above.
+
+**Fix (on the integrating application's side):** your `getfileinformation` or `getaccessright`
+handler must echo back the owner, classification, and rep-code details it received in the
+request, not substitute a static/placeholder value. See the Recommendation notes under
+GetAccessRight (Response — User has access) and GetFileInformation (Response) above — only
+override these fields when deliberately reassigning ownership, and only with a `rep-code` that
+maps to a real, adaptor-bound repository on the calling Policy Server.
+
+**Where to look:** check the Policy Server log for the actual validation failure (invalid
+rep-code, unresolvable email, invalid classification ID) — the SDK-side message alone doesn't
+say which field was the problem.
 
 ---
 

@@ -22,7 +22,8 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 - **All SDK operations** — Protect, Unprotect, SendRequest
 - **Advanced Security** — RSA key pair setup, `DefaultCryptoHandler`, advanced privileges (Unprotect Any File, Add/Update other EAs)
 - **Policy Federation ARA callback service** — implementing the 3 HTTP endpoints (Ping, GetAccessRight, GetFileInformation), request/response XML, access rights, offline access, watermark, response scenarios, testing with Postman, and troubleshooting
-- **DRM API Server integration** — architecture, API vs SDK decision, all REST endpoints, file upload/protect/download lifecycle, authentication (JWT tokens, refresh), storage options (disk/S3/DB), deployment, error codes, best practices, and sample code in Java and curl
+- **DRM API Server integration** — architecture, API vs SDK decision, all REST endpoints, file upload/protect/download lifecycle, authentication (API key via Admin Console, legacy JWT tokens/refresh), storage options (disk/S3/DB), error codes, best practices, and sample code in Java and curl
+- **DRM API Server prerequisites & getting started** — what needs to be configured on the Policy Server and DRM API Server before you can call the API, the Admin Console API key walkthrough (creating an Application, mapping it to an EA, generating a key), testing your setup (sanity script, Swagger UI), and who to contact — not a deployment guide
 - **Seclore Online Integration** — in-app file open without downloading, security model (encrypted caching, HTTPS streaming, Master Data Key-protected keys, no personnel access to decrypted content), iFrame deprecation, EA endpoint implementation (checkFile, getFile, putFile, initEdit, edit, renewToken, open/close events), proof key validation (RSA 3-combination check), access token lifecycle (JWT generation, renewal on 401), CFAD (native desktop open), file size limits, and design considerations
 - **Seclore Endpoint SDK** — `SecloreActionDispatcher.exe` integration for DLP/classification tools; protect (self and policy), protectshare, share, and classify actions; bulk classification via `BulkClassifier.exe`; Mac Seclore Lite support; troubleshooting and log locations
 - **Identity Federation** — native repositories vs. Custom Repository Adaptor (CRA); SAML 2.0, OAuth 2.0, and OpenID Connect protocol detail; pure API-based CRA flow and security hardening; User Search and when it's optional; Seclore repository/adaptor concepts
@@ -38,6 +39,8 @@ Ask it questions about SDK setup, protection types, method signatures, REST endp
 ```
 
 How do I initialize the SDK?
+
+I'm getting "FSHelper session with the given identifier does not exists" from getHelper() even though initializeHelper() looked fine — what's wrong?
 
 Give me sample code for Independent Rights protection.
 
@@ -57,13 +60,27 @@ I'm getting ARAException: Unknown Response Status '0' — how do I fix it?
 
 What XML should my /getaccessright endpoint return when a user has no access?
 
+I'm getting WSClientException with -240011 "Repository.getAdapter() ... is null" when protecting with External Reference or File ID — what's wrong?
+
 Should I use the DRM API Server or the Server SDK for my Python application?
 
 Walk me through the full protect flow using the DRM API Server.
 
+Can I unprotect any file using the DRM API Server, not just files protected by my own EA?
+
 What storage options does the API Server support?
 
 I'm getting DRM-1013 on every API call — how do I fix it?
+
+How do I get an API key for the DRM API Server?
+
+What's the difference between the API key and JWT authentication models?
+
+What do I need before I can call the DRM API Server for the first time?
+
+What's the difference between /health and /healthcheck?
+
+Who do I contact if the DRM API Server prerequisite check fails?
 
 What is the difference between fileStorageId and secloreFileId?
 
@@ -137,6 +154,11 @@ seclore-integration-assistant/
     ├── api-server-guide.md        ← DRM API Server — architecture, API vs SDK decision, all
     │                                  REST endpoints, file lifecycle, auth, storage options,
     │                                  deployment, error codes, best practices, sample code
+    ├── api-server-config-guide.md ← DRM API Server prerequisites & getting started — what needs
+    │                                  to be configured on the Policy Server and API Server before
+    │                                  you can call the API, Admin Console API key walkthrough,
+    │                                  testing (sanity script, Swagger), who to contact — not a
+    │                                  deployment guide
     ├── seclore-online-guide.md    ← Seclore Online Integration — use case, security model,
     │                                  iFrame deprecation, communication flows, key concepts,
     │                                  all SO and EA endpoints, proof key validation,
@@ -172,6 +194,7 @@ seclore-integration-assistant/
 | v1.5 | Added sendRequest() methods details to Manage Policy, EA and Hot Folder.|
 | v1.6 | Added Identity Federation — SAML 2.0, OAuth 2.0, OpenID Connect, Custom Repository Adaptor (all four flavors), User Search, Seclore repository/adaptor concepts |
 | v1.7 | Added SIEM / Activity & Audit Log Integration — push-based Seclore for SIEM tool and direct EXTFILEUSERACTIVITYVIEW/EXTAUDITLOGVIEW database-view access |
+| v1.8 | Added new corner cases for SDK and API errors and other updates. |
 
 ---
 
